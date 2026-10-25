@@ -1,0 +1,8 @@
+# requirements.txt – Diffie-Hellman Key Exchange Demo
+# =====================================================
+# Core: standard library only (no extra packages needed for dh/, cli.py, network_demo/)
+# UI:   Streamlit + pandas for the interactive app
+# Tests: standard library (unittest)
+
+streamlit>=1.32.0
+pandas>=2.0.0
