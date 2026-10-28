@@ -18,6 +18,7 @@ Features
 
 from __future__ import annotations
 
+import socket
 import sys
 import time
 from pathlib import Path
@@ -26,7 +27,7 @@ import streamlit as st
 # ── Ensure project root is on path ──────────────────────────────────
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dh.protocol import DHProtocol, DHMode
+from dh.protocol import DHProtocol, DHMode, TEXTBOOK_P, TEXTBOOK_G, TEXTBOOK_A, TEXTBOOK_B
 from dh.attacks import Eve, Mallory, timing_attack_benchmark
 from dh.kdf import derive_key, xor_encrypt, xor_decrypt, fingerprint
 from dh.math_utils import (
@@ -34,6 +35,7 @@ from dh.math_utils import (
     _factorize_p_minus_1, generate_prime, generate_safe_prime, find_primitive_root,
 )
 from dh.party import Party
+from dh.transport import get_lan_ips, send_msg, recv_msg, compute_key_fingerprint
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page config
