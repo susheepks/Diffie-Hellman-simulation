@@ -17,6 +17,7 @@ from .party import Party
 from .protocol import DHProtocol, DHMode
 from .attacks import Eve, Mallory
 from .kdf import derive_key, xor_encrypt, xor_decrypt
+from .transport import get_lan_ips, send_msg, recv_msg, compute_key_fingerprint
 
 __all__ = [
     "mod_exp",
@@ -34,4 +35,8 @@ __all__ = [
     "derive_key",
     "xor_encrypt",
     "xor_decrypt",
+    "get_lan_ips",
+    "send_msg",
+    "recv_msg",
+    "compute_key_fingerprint",
 ]

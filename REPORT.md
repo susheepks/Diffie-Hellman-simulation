@@ -239,6 +239,82 @@ flowchart TD
 
 5. **Step logging**: `DHProtocol.log` stores every action with actor, formula, and substituted values — directly consumed by both the CLI and the Streamlit UI.
 
+### 5.3 Network Architecture (Two-Laptop Live Deployment)
+
+The project includes a production-style, distributed TCP implementation designed specifically for demonstration across **two separate physical laptops** on a local Wi-Fi or phone hotspot.
+
+#### Message Framing Specification
+All network packets use **length-prefixed framing**:
+- A 4-byte big-endian unsigned integer header (`struct.pack('>I', length)`)
+- Followed by the UTF-8 JSON payload.
+This eliminates TCP packet fragmentation issues and guarantees full message reassembly.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Laptop 1 (Alice - Server)
+    participant Channel as Insecure Wi-Fi (Eve Sniffing)
+    participant B as Laptop 2 (Bob - Client)
+
+    Note over A: Alice binds to 0.0.0.0:5000<br/>Prints LAN IP for Bob
+    B->>Channel: TCP Connect to Alice_IP:5000
+    Channel->>A: Connection Established
+    B->>A: {"type": "hello", "from": "Bob"}
+
+    Note over A: Alice generates public params (p, g)
+    A->>B: {"type": "params", "p": 23, "g": 5}
+    Note over B: Bob verifies p is prime (Miller-Rabin)<br/>and 2 <= g <= p-2
+
+    Note over A: Alice picks secret a = 6 (never sent!)
+    Note over B: Bob picks secret b = 15 (never sent!)
+
+    A->>B: {"type": "public", "name": "Alice", "value": A=8}
+    B->>A: {"type": "public", "name": "Bob", "value": B=19}
+
+    Note over A: Alice computes s = B^a mod p = 19^6 mod 23 = 2
+    Note over B: Bob computes s = A^b mod p = 8^15 mod 23 = 2
+
+    Note over A: Key K = SHA-256(s=2)<br/>Fingerprint = SHA-256(K)[:8]
+    Note over B: Key K = SHA-256(s=2)<br/>Fingerprint = SHA-256(K)[:8]
+
+    A->>B: {"type": "confirm", "fingerprint": "1b7fdd84"}
+    B->>A: {"type": "confirm", "fingerprint": "1b7fdd84"}
+    Note over A,B: Both verify MATCH ✅
+
+    Note over A,B: 💬 End-to-End Encrypted Chat
+    A->>B: {"type": "chat", "ciphertext": "b00b84b7..."}
+    Note over B: Decrypts with K: "Hello Bob!"
+    B->>A: {"type": "chat", "ciphertext": "b007c89a..."}
+    Note over A: Decrypts with K: "Hi Alice!"
+```
+
+#### Hardware Setup & Demonstration Placeholders
+
+```
++------------------------------------------------------------------------+
+|                                                                        |
+|                 [ PLACEHOLDER: TWO-LAPTOP SETUP PHOTO ]                |
+|                                                                        |
+|   Insert photograph here showing:                                      |
+|   - Laptop 1 (Left): Running Alice Server on Wi-Fi IP                      |
+|   - Laptop 2 (Right): Running Bob Client connecting to Alice IP             |
+|   - Mobile Phone Hotspot between them establishing the LAN link        |
+|                                                                        |
++------------------------------------------------------------------------+
+```
+
+```
++------------------------------------------------------------------------+
+|                                                                        |
+|                [ PLACEHOLDER: TERMINAL OUTPUT SCREENSHOTS ]            |
+|                                                                        |
+|   Insert screenshot here showing side-by-side terminal windows:        |
+|   - Left: Alice terminal output with formula & fingerprint MATCH       |
+|   - Right: Bob terminal output with formula & encrypted chat exchange  |
+|                                                                        |
++------------------------------------------------------------------------+
+```
+
 ---
 
 ## 6. Results

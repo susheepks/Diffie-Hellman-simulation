@@ -205,19 +205,82 @@ because each session used a different random `a`.
 
 ## Q20. What happens in the network demo, and what does it demonstrate?
 
-**A:** `alice_server.py` and `bob_client.py` run as two separate OS processes
-communicating over TCP on `localhost:65432`. They exchange JSON messages:
-1. Alice sends `{"type":"params","p":…,"g":…}`.
-2. Alice sends her public key `{"type":"public","value":A}`.
-3. Bob sends his public key `{"type":"public","value":B}`.
-4. Each side computes the shared secret and prints a key fingerprint.
+**A:** `alice.py` (Laptop 1 / server) and `bob.py` (Laptop 2 / client) communicate over real TCP sockets using 4-byte length-prefixed JSON messages:
+1. Bob connects and sends `{"type":"hello","from":"Bob"}`.
+2. Alice sends `{"type":"params","p":p,"g":g}` (Bob verifies $p$ is prime and $g$ is in range).
+3. Each side independently picks private key $a$ or $b$ (kept secret).
+4. Alice sends $A = g^a \pmod p$; Bob sends $B = g^b \pmod p$.
+5. Both compute $s$ locally ($s = B^a \pmod p = A^b \pmod p$).
+6. Both derive a 256-bit SHA-256 key and exchange a short confirmation fingerprint (`MATCH`).
+7. Both exchange end-to-end encrypted chat messages over the socket.
 
-Both terminals print the **same fingerprint**, demonstrating that real DH over a
-network produces an identical shared key on both ends — without ever transmitting
-the key itself. This ties the cryptography module to the networking module of the
-course.
+Both screens display **MATCH**, demonstrating that real DH over a physical network establishes identical shared keys without ever transmitting private keys or the secret.
+
+---
+
+## Q21. Why is TCP used instead of UDP for the Diffie-Hellman key exchange?
+
+**A:** TCP provides **reliable, in-order, connection-oriented byte stream delivery**:
+1. **Guaranteed Delivery:** If a single parameter ($p, g$) or public key ($A, B$) is dropped or corrupted on the network, the mathematical modular exponentiation will compute a completely wrong secret, breaking the exchange.
+2. **Strict In-Order Sequencing:** DH is a stateful multi-step handshake (Parameters $\rightarrow$ Keys $\rightarrow$ Secrets $\rightarrow$ Confirmation). Packet reordering in UDP would cause out-of-order state failures.
+3. **Stream Framing:** Our 4-byte length header ensures complete message reassembly across IP packets regardless of network MTU.
+
+---
+
+## Q22. Exactly what values travel over the network wire, and what values are NEVER sent?
+
+**A:**
+- **Values sent over the wire (Public Channel):**
+  - Protocol greetings (`{"type":"hello"}`)
+  - Public modulus $p$ and generator $g$ (`{"type":"params"}`)
+  - Public keys $A = g^a \pmod p$ and $B = g^b \pmod p$ (`{"type":"public"}`)
+  - Short 8-character confirmation fingerprints (`{"type":"confirm"}`)
+  - Encrypted message ciphertexts (`{"type":"chat"}`)
+- **Values NEVER sent over the wire (Private / Secret):**
+  - Alice's private key $a$
+  - Bob's private key $b$
+  - The shared secret $s = g^{ab} \pmod p$
+  - The derived 256-bit symmetric encryption key $K$
+
+---
+
+## Q23. What does a passive eavesdropper (Eve) sniffing Wi-Fi packets see? Can she decrypt the chat?
+
+**A:** When running a Wi-Fi packet sniffer (like Wireshark or our `network_demo/eve_sniffer.py`), Eve intercepts all plaintext JSON packets. She sees:
+- $p$, $g$, $A$, and $B$
+- The confirmation fingerprint
+- The raw hexadecimal ciphertext of each chat message (e.g. `b00b84b7...`)
+
+**Can Eve decrypt the chat? No.**  
+To decrypt the chat, Eve needs key $K = \text{SHA-256}(s)$.  
+To compute $s = g^{ab} \pmod p$, Eve must find $a$ or $b$ from the captured values $A = g^a \pmod p$ and $B = g^b \pmod p$. This is the **Discrete Logarithm Problem (DLP)**, which is computationally infeasible for large prime moduli.
+
+---
+
+## Q24. Why do Alice and Bob send a short key fingerprint (hash) during key confirmation instead of the key itself?
+
+**A:** If Alice or Bob transmitted the symmetric key $K$ over the network to check for a match, Eve would simply intercept $K$ and decrypt all traffic, defeating the entire purpose of Diffie-Hellman!
+
+Instead, both parties compute a one-way cryptographic hash:
+$$\text{Fingerprint} = \text{SHA-256}(K)[:8]$$
+Because cryptographic hash functions are **pre-image resistant (one-way)**, Eve cannot invert the fingerprint to discover $K$. However, Alice and Bob can compare fingerprints to confirm that both parties arrived at the exact same key before transmitting encrypted data.
+
+---
+
+## Q25. How would a Man-in-the-Middle (MITM) attack work on this two-laptop setup, and how do real-world systems prevent it?
+
+**A:**
+1. **How MITM works:** An attacker (Mallory) sitting between Alice and Bob (demonstrated by `eve_sniffer.py --mitm`) intercepts Alice's public key $A$ and Bob's public key $B$, replacing them with Mallory's own public key $M = g^m \pmod p$.
+   - Alice computes shared secret $s_1 = M^a \pmod p$ (shared with Mallory).
+   - Bob computes shared secret $s_2 = M^b \pmod p$ (shared with Mallory).
+   - Mallory decrypts Alice's messages with $s_1$, tampers with or reads them, re-encrypts with $s_2$, and forwards them to Bob. Neither party realizes their messages are being intercepted.
+2. **How real-world systems prevent it:** Unauthenticated Diffie-Hellman is inherently vulnerable to MITM. Real-world systems use **Authenticated DH**:
+   - **TLS / HTTPS:** The server signs its ephemeral DH public key with an RSA or ECDSA private key certified by a trusted Certificate Authority (CA).
+   - **SSH:** Uses host keys stored in `~/.ssh/known_hosts` to authenticate the server's public key.
+   - **Signal / WhatsApp:** Uses long-term Identity Keys and Safety Number verification (comparing QR codes / fingerprints out-of-band).
 
 ---
 
 *"The most beautiful thing in cryptography is that you can share a secret
 without ever actually sharing it." — paraphrase of Diffie & Hellman's insight.*
+

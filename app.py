@@ -540,37 +540,84 @@ if demo_tab == "🔑 Key Exchange":
                 for s in steps_s[:20]:
                     st.markdown(f"`Step {s['step']}` — {s['description']}")
 
-    # ── KDF + XOR demo ───────────────────────────────────────────────
+    # ── KDF + Encrypted Chat Demo ─────────────────────────────────────
     st.markdown("---")
-    st.markdown("### 🔑 Shared Key Demo (SHA-256 KDF + XOR Cipher)")
-    st.caption("⚠️ This XOR cipher is for *demonstration only* — not production-safe.")
+    st.markdown("### 💬 End-to-End Encrypted Chat: What Does the Shared Key Do?")
+    st.markdown("""
+    **Crucial Concept:** Diffie-Hellman is a **Key Exchange** protocol, *not* an encryption algorithm.  
+    It computes a shared number $s$. To actually send messages, Alice and Bob use **Hybrid Cryptography**:
+    1. **Key Derivation (KDF):** Feed the shared integer $s$ into a cryptographic hash (SHA-256) to produce a 256-bit symmetric key $K$.
+    2. **Symmetric Encryption:** Use key $K$ with a fast cipher (AES in TLS/HTTPS; XOR in this demo) to encrypt and decrypt chat messages.
+    """)
 
     s_val = alice.shared_secret if alice else 0
     demo_key = derive_key(s_val)
     demo_fp  = fingerprint(demo_key)
 
-    col_kdf1, col_kdf2 = st.columns(2)
-    with col_kdf1:
+    col_k1, col_k2 = st.columns([1, 1])
+    with col_k1:
         st.markdown(f"""
-        {formula(f"K = SHA-256( {s_val}.to_bytes() )")}
-        **Key (hex):** `{demo_key.hex()[:32]}…`  
-        **Fingerprint:** `{demo_fp}`
-        """)
-    with col_kdf2:
-        message_input = st.text_input("Alice's message to Bob:", value="Hello Bob! DH works! 🔐")
+        <div style="background:rgba(99,179,237,0.1); border:1px solid rgba(99,179,237,0.3); border-radius:10px; padding:0.9rem;">
+            <b>🔑 Derived Symmetric Key (K):</b><br>
+            <code>K = SHA-256( s = {s_val} )</code><br>
+            <small style="color:#a0aec0">Full 256-bit key (hex):</small><br>
+            <code style="word-break:break-all; font-size:0.85em;">{demo_key.hex()}</code><br>
+            <b>Fingerprint:</b> <code>{demo_fp}</code>
+        </div>
+        """, unsafe_allow_html=True)
+    with col_k2:
+        st.markdown("""
+        <div style="background:rgba(72,187,120,0.1); border:1px solid rgba(72,187,120,0.3); border-radius:10px; padding:0.9rem;">
+            <b>🛡️ Why This Is Secure:</b><br>
+            • Both Alice and Bob hold key $K$ without ever sending $K$ over the network.<br>
+            • Eve intercepts only ciphertext on the public channel.<br>
+            • Without the secret $s$, Eve cannot derive $K$ or decrypt any message!
+        </div>
+        """, unsafe_allow_html=True)
 
-    if message_input:
-        msg_bytes = message_input.encode()
-        ct = xor_encrypt(demo_key, msg_bytes)
-        pt = xor_decrypt(demo_key, ct)
-        st.success(f"✅ Bob decrypts: `{pt.decode()}`")
+    st.markdown("")
+    chat_col1, chat_col2 = st.columns(2)
+
+    with chat_col1:
+        st.markdown("#### 👩 Alice ➡️ Bob")
+        alice_msg = st.text_input("Alice types a message:", value="Meet me at 5 PM! DH works 🔐", key="alice_chat_input")
+        if alice_msg:
+            a_bytes = alice_msg.encode()
+            a_ct = xor_encrypt(demo_key, a_bytes)
+            a_pt = xor_decrypt(demo_key, a_ct).decode("utf-8", errors="replace")
+            st.markdown(f"""
+            <div style="background:rgba(255,255,255,0.03); border-left:3px solid #48bb78; padding:0.6rem 0.8rem; border-radius:4px; font-size:0.9rem;">
+                <b>Plaintext:</b> "{alice_msg}"<br>
+                <b>Ciphertext on wire:</b> <code style="word-break:break-all;">{a_ct.hex()}</code><br>
+                <b>👨 Bob decrypts:</b> <span style="color:#68d391; font-weight:600;">"{a_pt}"</span> ✅
+            </div>
+            """, unsafe_allow_html=True)
+
+    with chat_col2:
+        st.markdown("#### 👨 Bob ➡️ Alice (Reply)")
+        bob_msg = st.text_input("Bob types a reply:", value="Got it! Secure tunnel active 🚀", key="bob_chat_input")
+        if bob_msg:
+            b_bytes = bob_msg.encode()
+            b_ct = xor_encrypt(demo_key, b_bytes)
+            b_pt = xor_decrypt(demo_key, b_ct).decode("utf-8", errors="replace")
+            st.markdown(f"""
+            <div style="background:rgba(255,255,255,0.03); border-left:3px solid #63b3ed; padding:0.6rem 0.8rem; border-radius:4px; font-size:0.9rem;">
+                <b>Plaintext:</b> "{bob_msg}"<br>
+                <b>Ciphertext on wire:</b> <code style="word-break:break-all;">{b_ct.hex()}</code><br>
+                <b>👩 Alice decrypts:</b> <span style="color:#63b3ed; font-weight:600;">"{b_pt}"</span> ✅
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("")
+    with st.expander("🕵️ What does Eve see on the public channel? (Click to inspect)", expanded=False):
         st.markdown(f"""
-        | Step | Value |
-        |------|-------|
-        | Plaintext | `{message_input}` |
-        | Ciphertext (hex) | `{ct.hex()}` |
-        | Bob decrypts | `{pt.decode()}` |
-        | Keys match? | {'✅ Yes' if pt == msg_bytes else '❌ No'} |
+        Eve is listening on the public network wires between Alice and Bob. Here is **all** Eve sees:
+        - Packet 1 (Alice public key): `A = {alice.public_key}`
+        - Packet 2 (Bob public key): `B = {bob.public_key}`
+        - Packet 3 (Alice's message): `{xor_encrypt(demo_key, alice_msg.encode()).hex() if alice_msg else ''}`
+        - Packet 4 (Bob's reply): `{xor_encrypt(demo_key, bob_msg.encode()).hex() if bob_msg else ''}`
+
+        *Notice: Eve sees purely random-looking hexadecimal garbage. Without private key $a$ or $b$, she cannot calculate $s={s_val}$ and cannot decrypt either message!*
         """)
 
 
@@ -754,65 +801,181 @@ elif demo_tab == "🦹 Man-in-the-Middle":
 # ──────────────────────────────────────────────────────────────────────────────
 
 elif demo_tab == "🌐 Network Demo":
-    st.markdown("## 🌐 Network Demo (Socket-based DH)")
+    st.markdown("## 🌐 Two-Laptop Network Demo (Real TCP Sockets)")
     st.markdown("""
-    The `network_demo/` folder contains two Python scripts that simulate DH over 
-    real TCP sockets on localhost.
+    Demonstrate Diffie-Hellman Key Exchange across **two separate laptops** over a real local network (Wi-Fi or phone hotspot):
+    - **Laptop 1 = Alice (TCP Server):** Binds to port `5000` and announces its LAN IP.
+    - **Laptop 2 = Bob (TCP Client):** Connects to Alice's LAN IP and verifies public parameters.
+    - **Framing:** 4-byte big-endian length header preceding UTF-8 JSON packets.
     """)
 
-    st.markdown("### How to Run")
-    st.code("""
-# Terminal 1 – Start Alice (server)
-python network_demo/alice_server.py --preset
+    role = st.radio("Select This Laptop's Role:", [
+        "👩 Laptop 1: Alice (Server)",
+        "👨 Laptop 2: Bob (Client)"
+    ], horizontal=True)
 
-# Terminal 2 – Start Bob (client, in a new window)
-python network_demo/bob_client.py --preset
+    lan_ips = get_lan_ips()
 
-# Or use the batch file (Windows):
-run_demo.bat
+    if "Alice" in role:
+        st.markdown("### 👩 Laptop 1: Alice (Server)")
+        col_a1, col_a2 = st.columns([1, 1])
+        with col_a1:
+            srv_port = st.number_input("Listen Port", value=5000, min_value=1024, max_value=65535, key="net_srv_port")
+            preset_choice = st.checkbox("Use Textbook Preset (p=23, g=5, a=6)", value=True, key="net_alice_preset")
+        with col_a2:
+            st.markdown("**Detected Usable LAN IPv4 Address(es):**")
+            if lan_ips:
+                for ip in lan_ips:
+                    st.code(f"python network_demo/bob.py --host {ip} --port {srv_port}", language="bash")
+                st.caption("Tell Bob on Laptop 2 to run the command above!")
+            else:
+                st.warning("⚠️ No Wi-Fi LAN IP detected. Connect both laptops to the same Wi-Fi or phone hotspot.")
 
-# Shell script (Linux/macOS):
-bash run_demo.sh
-    """, language="bash")
+        st.markdown("""
+        <div style="background:rgba(72,187,120,0.1); border:1px solid rgba(72,187,120,0.3); border-radius:10px; padding:0.9rem; margin-bottom:1rem;">
+            <b>🖥️ Recommended: Run Live Terminal on Laptop 1:</b><br>
+            <code>python network_demo/alice.py --port 5000 --preset</code>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.markdown("### Expected Output")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("**Alice's terminal:**")
-        st.code("""
-[14:30:01.123] [ALICE] Using textbook preset: p=23, g=5
-[14:30:01.124] [ALICE] Alice's private key a = 6  [KEEP SECRET]
-[14:30:01.124] [ALICE] Alice's public key  A = 8
-[14:30:01.124] [ALICE] Listening on 127.0.0.1:65432
-[14:30:02.456] [ALICE] Bob connected from ...
-[14:30:02.457] [ALICE] Sent params → Bob
-[14:30:02.458] [ALICE] Sent public key → Bob: A = 8
-[14:30:02.459] [ALICE] Received Bob's public key: B = 19
-[14:30:02.460] [ALICE] Shared secret s = 2
-[14:30:02.460] [ALICE] Key fingerprint: 0a:b2:...
-[14:30:02.461] [ALICE] ✅ Shared key established!
-        """, language="text")
-    with col_b:
-        st.markdown("**Bob's terminal:**")
-        st.code("""
-[14:30:02.455] [BOB  ] Connecting to Alice...
-[14:30:02.456] [BOB  ] Connected to Alice!
-[14:30:02.457] [BOB  ] Received params: p=23, g=5
-[14:30:02.458] [BOB  ] Bob's private key b = 15  [KEEP SECRET]
-[14:30:02.458] [BOB  ] Bob's public key  B = 19
-[14:30:02.459] [BOB  ] Received Alice's public key: A = 8
-[14:30:02.459] [BOB  ] Sent public key → Alice: B = 19
-[14:30:02.460] [BOB  ] Shared secret s = 2
-[14:30:02.460] [BOB  ] Key fingerprint: 0a:b2:...
-[14:30:02.461] [BOB  ] ✅ Fingerprint check: ✅ MATCH
-        """, language="text")
+        if st.button("🚀 Listen for Bob (Wait for Connection – 20s timeout)", type="primary", key="alice_listen_btn"):
+            with st.spinner(f"Alice listening on 0.0.0.0:{srv_port}... Tell Bob to connect now!"):
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
+                        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                        srv.bind(("0.0.0.0", int(srv_port)))
+                        srv.listen(1)
+                        srv.settimeout(20.0)
+                        conn, addr = srv.accept()
+                        with conn:
+                            # 1. Hello
+                            hello = recv_msg(conn)
+                            # 2. Params
+                            p = TEXTBOOK_P if preset_choice else 23
+                            g = TEXTBOOK_G if preset_choice else 5
+                            send_msg(conn, {"type": "params", "p": p, "g": g})
+                            # 3. Party
+                            alice = Party("Alice", p, g, private_key=TEXTBOOK_A if preset_choice else None)
+                            # 4. Exchange
+                            send_msg(conn, {"type": "public", "name": "Alice", "value": alice.public_key})
+                            b_msg = recv_msg(conn)
+                            bob_val = b_msg["value"]
+                            # 5. Shared secret
+                            alice.receive_public_value(bob_val)
+                            s = alice.compute_shared_secret()
+                            key = derive_key(s)
+                            fp = compute_key_fingerprint(key)
+                            # 6. Confirm
+                            send_msg(conn, {"type": "confirm", "fingerprint": fp})
+                            c_msg = recv_msg(conn)
+                            bob_fp = c_msg.get("fingerprint")
+                            match = "✅ MATCH" if bob_fp == fp else "❌ MISMATCH"
 
-    st.markdown("### Message Format (JSON over TCP)")
-    st.json({
-        "params_message": {"type": "params", "p": 23, "g": 5},
-        "public_message":  {"type": "public", "value": 8},
-        "done_message":    {"type": "done", "fingerprint": "0a:b2:c3:d4:e5:f6:a7:b8"},
-    })
+                            st.success(f"✅ Bob connected from {addr[0]}:{addr[1]}! Handshake Completed.")
+                            st.markdown(f"""
+                            <div class="party-card alice-card">
+                                <h3>👩 Alice's Side of the Exchange</h3>
+                                <b>Parameters:</b> p={p}, g={g}<br>
+                                <b>Alice's Private Key (a):</b> {priv(alice.private_key)}<br>
+                                <b>Alice's Public Key (A):</b> {pub(alice.public_key)}<br>
+                                <b>Received Bob's Public Key (B):</b> {pub(bob_val)}<br>
+                                <b>Shared Secret:</b> <code>s = B^a mod p = {bob_val}^{alice.private_key} mod {p} = {s}</code><br>
+                                <b>Derived Key Fingerprint:</b> <code>{fp}</code><br>
+                                <b>Bob's Fingerprint:</b> <code>{bob_fp}</code> ({match})
+                            </div>
+                            """, unsafe_allow_html=True)
+                except socket.timeout:
+                    st.warning("⏱️ Listening timed out after 20 seconds. Ensure Bob ran his connection command!")
+                except Exception as e:
+                    st.error(f"❌ Server error: {e}")
+
+    else:
+        st.markdown("### 👨 Laptop 2: Bob (Client)")
+        col_b1, col_b2 = st.columns([1, 1])
+        with col_b1:
+            target_ip = st.text_input("Alice's IP Address (Laptop 1)", value=lan_ips[0] if lan_ips else "127.0.0.1", key="net_alice_ip")
+            target_port = st.number_input("Alice's Port", value=5000, min_value=1024, max_value=65535, key="net_bob_port")
+            preset_bob = st.checkbox("Use Textbook Preset (b=15)", value=True, key="net_bob_preset")
+        with col_b2:
+            st.markdown("**Pre-Flight Connectivity Test:**")
+            if st.button("🔍 Test Connection to Alice", key="test_conn_btn"):
+                try:
+                    s_test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s_test.settimeout(2.0)
+                    s_test.connect((target_ip, int(target_port)))
+                    s_test.close()
+                    st.success(f"✅ Reachable! Port {target_port} on {target_ip} is open and ready.")
+                except Exception as e:
+                    st.error(f"❌ Cannot connect ({e}). Check Wi-Fi, IP, and Alice's firewall.")
+
+        st.markdown(f"""
+        <div style="background:rgba(99,179,237,0.1); border:1px solid rgba(99,179,237,0.3); border-radius:10px; padding:0.9rem; margin-bottom:1rem;">
+            <b>🖥️ Recommended: Run Live Terminal on Laptop 2:</b><br>
+            <code>python network_demo/bob.py --host {target_ip} --port {target_port} --preset</code>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if st.button("🚀 Connect to Alice & Run Handshake", type="primary", key="bob_connect_btn"):
+            with st.spinner(f"Connecting to Alice at {target_ip}:{target_port}..."):
+                try:
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(5.0)
+                    sock.connect((target_ip, int(target_port)))
+                    with sock:
+                        # 1. Hello
+                        send_msg(sock, {"type": "hello", "from": "Bob"})
+                        # 2. Params
+                        p_msg = recv_msg(sock)
+                        p, g = p_msg["p"], p_msg["g"]
+                        if not miller_rabin_is_prime(p):
+                            st.error(f"❌ SECURITY ALERT: Modulus p={p} is NOT prime! Bob aborts.")
+                            st.stop()
+                        # 3. Party
+                        bob = Party("Bob", p, g, private_key=TEXTBOOK_B if preset_bob else None)
+                        # 4. Exchange
+                        a_msg = recv_msg(sock)
+                        alice_val = a_msg["value"]
+                        send_msg(sock, {"type": "public", "name": "Bob", "value": bob.public_key})
+                        # 5. Secret
+                        bob.receive_public_value(alice_val)
+                        s = bob.compute_shared_secret()
+                        key = derive_key(s)
+                        fp = compute_key_fingerprint(key)
+                        # 6. Confirm
+                        conf_msg = recv_msg(sock)
+                        alice_fp = conf_msg["fingerprint"]
+                        send_msg(sock, {"type": "confirm", "fingerprint": fp})
+                        match = "✅ MATCH" if alice_fp == fp else "❌ MISMATCH"
+
+                        st.success(f"✅ Handshake Completed with Alice at {target_ip}:{target_port}!")
+                        st.markdown(f"""
+                        <div class="party-card bob-card">
+                            <h3>👨 Bob's Side of the Exchange</h3>
+                            <b>Parameters Received & Verified:</b> p={p} (Prime ✓), g={g}<br>
+                            <b>Bob's Private Key (b):</b> {priv(bob.private_key)}<br>
+                            <b>Bob's Public Key (B):</b> {pub(bob.public_key)}<br>
+                            <b>Received Alice's Public Key (A):</b> {pub(alice_val)}<br>
+                            <b>Shared Secret:</b> <code>s = A^b mod p = {alice_val}^{bob.private_key} mod {p} = {s}</code><br>
+                            <b>Derived Key Fingerprint:</b> <code>{fp}</code><br>
+                            <b>Alice's Fingerprint:</b> <code>{alice_fp}</code> ({match})
+                        </div>
+                        """, unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"❌ Connection failed: {e}. Check IP and firewall!")
+
+    st.markdown("---")
+    with st.expander("📡 Wire Protocol Details (Length-Prefixed Framing)", expanded=False):
+        st.markdown("""
+        ### Length-Prefixed Framing Specification
+        Each network message begins with a **4-byte big-endian unsigned integer** indicating payload byte count:
+        ```
+        +-------------------------+----------------------------------+
+        |  4-Byte Length Header   |       UTF-8 JSON Payload         |
+        |  struct.pack('>I', len) |  {"type": "params", "p": 23, ..} |
+        +-------------------------+----------------------------------+
+        ```
+        **Security Guarantee:** Private keys ($a, b$) and shared secret ($s$) are **never transmitted**. Only public values ($p, g, A, B$), confirmation fingerprints, and encrypted ciphertext cross the wire.
+        """)
 
 
 # ──────────────────────────────────────────────────────────────────────────────

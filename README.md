@@ -130,35 +130,116 @@ python cli.py --mode auto --bits 32 --mitm
 
 ---
 
-## 🌐 Network Demo (Socket Simulation)
+## 🌐 Two-Laptop Setup Demonstration
 
-### Option A – Automated (Windows)
-```
-run_demo.bat --preset
-```
+The project supports a real two-laptop live demonstration over TCP:
+- **Laptop 1 = Alice (TCP Server):** Binds to `0.0.0.0` on port 5000 and announces its LAN IP.
+- **Laptop 2 = Bob (TCP Client):** Connects to Alice's LAN IP on port 5000.
+- **Protocol:** 4-byte big-endian length-prefixed JSON frames over TCP.
 
-### Option B – Automated (Linux/macOS)
+---
+
+### Step 1: Network & Wi-Fi Configuration
+
+1. **Connect both laptops to the SAME network.**
+   > **Pro Tip for College Demos:** Use a **Personal Mobile Phone Hotspot**. College and university Wi-Fi networks typically enforce "Client Isolation" which blocks laptop-to-laptop socket connections. A phone hotspot guarantees direct communication.
+2. **Find Alice's IP (Laptop 1):**
+   ```bash
+   python scripts/find_ip.py
+   ```
+   *Alternative OS Commands:*
+   - **Windows:** `ipconfig` (look for `IPv4 Address` under your Wi-Fi adapter, e.g., `192.168.43.120`)
+   - **Linux:** `ip a` or `hostname -I`
+   - **macOS:** `ifconfig | grep inet`
+3. **Configure Firewall on Laptop 1 (Alice):**
+   Ensure incoming TCP traffic on port 5000 is allowed:
+   - **Windows PowerShell (Run as Administrator):**
+     ```powershell
+     New-NetFirewallRule -DisplayName "DH Demo" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow
+     ```
+   - **Linux:**
+     ```bash
+     sudo ufw allow 5000/tcp
+     ```
+
+---
+
+### Step 2: Pre-Flight Connection Check
+
+Before the presentation, verify that Laptop 2 can reach Laptop 1:
 ```bash
+# Run on Laptop 2 (Bob):
+python scripts/check_connection.py --host <ALICE_IP> --port 5000
+```
+If reachable, it will report latency and success (`✅ SUCCESS: Connected to ALICE_IP:5000`).
+
+---
+
+### Step 3: Run the Demonstration
+
+#### 👩 On Laptop 1 (Alice – Server):
+```bash
+python network_demo/alice.py --port 5000 --preset
+```
+*(For 64-bit safe prime generation, omit `--preset`: `python network_demo/alice.py --port 5000`)*
+
+#### 👨 On Laptop 2 (Bob – Client):
+```bash
+python network_demo/bob.py --host <ALICE_IP> --port 5000 --preset
+```
+
+#### 💻 Localhost Rehearsal (Single Machine):
+```bash
+# Windows one-click launcher:
+run_demo.bat --preset
+
+# Linux / macOS:
 bash run_demo.sh --preset
 ```
 
-### Option C – Manual (two terminals)
+#### 🕵️ Optional: Eavesdropper & MITM Relay
+To demonstrate what an eavesdropper sees or run a Man-in-the-Middle attack on a 3rd laptop (or in a 3rd terminal):
 ```bash
-# Terminal 1
-python network_demo/alice_server.py --preset
+# 1. Start Alice on port 5001:
+python network_demo/alice.py --port 5001 --preset
 
-# Terminal 2 (after Alice is listening)
-python network_demo/bob_client.py --preset
+# 2. Start Eve sniffer listening on port 5000, relaying to Alice on 5001:
+python network_demo/eve_sniffer.py --listen-port 5000 --alice-host <ALICE_IP> --alice-port 5001
+
+# For active Man-in-the-Middle attack:
+python network_demo/eve_sniffer.py --listen-port 5000 --alice-host <ALICE_IP> --alice-port 5001 --mitm
+
+# 3. Start Bob connecting to Eve on port 5000:
+python network_demo/bob.py --host <EVE_IP> --port 5000 --preset
 ```
 
-### Expected Output
-Both terminals print a **matching key fingerprint** (first 8 bytes of the SHA-256 derived key).
+---
 
-```
-[ALICE] Key fingerprint (first 8 bytes): 3a:f1:22:bc:09:de:7f:44
-[BOB  ] Key fingerprint (first 8 bytes): 3a:f1:22:bc:09:de:7f:44
-[BOB  ] Fingerprint check: ✅ MATCH
-```
+### 🔧 Troubleshooting Table
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| **Connection Timeout** | Campus Wi-Fi blocks client-to-client traffic | Switch both laptops to a mobile phone hotspot. |
+| **Connection Refused** | Alice's server is not yet running or wrong port | Start `network_demo/alice.py` first, then run Bob. |
+| **Firewall Blocking** | Windows/Linux firewall drops inbound TCP | Run the PowerShell firewall command on Alice's laptop. |
+| **Wrong IP Address** | Laptop has multiple IPs (virtual adapters/VPN) | Run `python scripts/find_ip.py` to identify the active Wi-Fi LAN IP. |
+| **Key Mismatch Warning** | Data corrupted on wire or MITM attack | Verify wire integrity or check if `eve_sniffer.py --mitm` is active. |
+
+---
+
+### 🎭 Step-by-Step Two-Presenter Live Demo Script
+
+| Step | Presenter 1 (Alice - Laptop 1) | Presenter 2 (Bob - Laptop 2) | Script & What to Explain to Evaluators |
+|:---:|:---|:---|:---|
+| **1** | Runs: `python network_demo/alice.py --port 5000 --preset` | Prepares command line with Alice's IP. | *"Alice starts as the TCP server listening on port 5000. Notice Alice's terminal announces her LAN IP address."* |
+| **2** | Observes connection from Bob. | Runs: `python network_demo/bob.py --host <IP> --port 5000 --preset` | *"Bob connects across the Wi-Fi network and sends a protocol greeting."* |
+| **3** | Sends parameters `p=23, g=5`. | Receives `p=23, g=5` and validates. | *"Alice announces public parameters p=23 and g=5. Bob runs the Miller-Rabin test to verify p is prime before accepting."* |
+| **4** | Generates secret $a=6$ (hidden). Computes $A = 5^6 \pmod{23} = 8$. | Generates secret $b=15$ (hidden). Computes $B = 5^{15} \pmod{23} = 19$. | *"Both parties generate private keys independently. Private keys never leave the machines."* |
+| **5** | Transmits $A = 8$ to Bob. Receives $B = 19$. | Transmits $B = 19$ to Alice. Receives $A = 8$. | *"Only public keys A and B cross the network wire. An eavesdropper sees A=8 and B=19."* |
+| **6** | Computes $s = B^a \pmod p = 19^6 \pmod{23} = \mathbf{2}$. | Computes $s = A^b \pmod p = 8^{15} \pmod{23} = \mathbf{2}$. | *"Both laptops compute the shared secret locally. Both reach s = 2 independently!"* |
+| **7** | Sends SHA-256 confirmation hash. Displays `✅ MATCH`. | Sends SHA-256 confirmation hash. Displays `✅ MATCH`. | *"Both derive a 256-bit key and exchange a short confirmation fingerprint to verify agreement."* |
+| **8** | Types a message: `"Meet at library 📚"`. | Terminal decrypts and displays plaintext. Types reply: `"Got it! 🚀"`. | *"Hybrid Cryptography in action: Alice and Bob now use the shared key to exchange end-to-end encrypted messages!"* |
+
 
 ---
 
