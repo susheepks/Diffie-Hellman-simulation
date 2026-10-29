@@ -32,7 +32,7 @@ from dh.protocol import DHProtocol, DHMode, TEXTBOOK_P, TEXTBOOK_G, TEXTBOOK_A, 
 from dh.attacks import Eve, Mallory, timing_attack_benchmark
 from dh.kdf import derive_key, xor_encrypt, xor_decrypt, fingerprint
 from dh.math_utils import (
-    mod_exp_steps, miller_rabin_is_prime, is_primitive_root,
+    mod_exp, mod_exp_steps, miller_rabin_is_prime, is_primitive_root,
     _factorize_p_minus_1, generate_prime, generate_safe_prime, find_primitive_root,
 )
 from dh.party import Party
