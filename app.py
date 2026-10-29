@@ -806,319 +806,349 @@ elif demo_tab == "🌐 Network Demo":
     import urllib.request
     import urllib.error
 
-    def relay_post(relay_url: str, data: dict) -> dict:
+    def relay_post(relay_url: str, path: str, data: dict) -> dict:
         """POST JSON to relay server."""
-        body = json.dumps(data).encode()
+        body = json.dumps(data).encode("utf-8")
         req = urllib.request.Request(
-            f"{relay_url.rstrip('/')}/send",
+            f"{relay_url.rstrip('/')}{path}",
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=3) as r:
-            return json.loads(r.read())
+        with urllib.request.urlopen(req, timeout=4) as r:
+            return json.loads(r.read().decode("utf-8"))
 
-    def relay_get(relay_url: str, recipient: str) -> list:
-        """GET pending messages for recipient from relay server."""
-        url = f"{relay_url.rstrip('/')}/messages/{recipient}"
-        with urllib.request.urlopen(url, timeout=3) as r:
-            return json.loads(r.read()).get("messages", [])
+    def relay_get(relay_url: str, path: str) -> dict:
+        """GET JSON from relay server."""
+        url = f"{relay_url.rstrip('/')}{path}"
+        with urllib.request.urlopen(url, timeout=4) as r:
+            return json.loads(r.read().decode("utf-8"))
 
-    st.markdown("## 🌐 Two-Laptop Network Demo (Real TCP Sockets)")
+    st.markdown("## 🌐 Two-Laptop Network Demo")
     st.markdown("""
-    Demonstrate Diffie-Hellman Key Exchange across **two separate laptops** over a real local network (Wi-Fi or phone hotspot):
-    - **Laptop 1 = Alice (TCP Server):** Binds to port `5000` and announces its LAN IP.
-    - **Laptop 2 = Bob (TCP Client):** Connects to Alice's LAN IP and verifies public parameters.
-    - **Framing:** 4-byte big-endian length header preceding UTF-8 JSON packets.
-
-    > 💡 **For live bidirectional chat**: Start the relay server on Laptop 1 first:
-    > `python network_demo/relay_server.py --port 6000`
-    > Then enter the Relay URL `http://<ALICE_IP>:6000` on **both laptops** below.
+    Demonstrate Diffie-Hellman Key Exchange and **End-to-End Encrypted Chat** across **two separate laptops** over a local Wi-Fi or phone hotspot.
+    - **No copy-pasting:** Public keys are exchanged over the local network via the lightweight Relay Server.
+    - **Zero plaintext leaks:** Only public parameters ($p, g$), public keys ($A, B$), and encrypted ciphertext travel across the Wi-Fi.
+    - **Shared secret derived locally:** Both laptops independently compute the exact same symmetric key!
     """)
 
+    lan_ips = get_lan_ips()
+    primary_lan_ip = lan_ips[0] if lan_ips else "172.20.10.3"
+
     role = st.radio("Select This Laptop's Role:", [
-        "👩 Laptop 1: Alice (Server)",
-        "👨 Laptop 2: Bob (Client)"
+        "👩 Laptop 1: Alice (Host / Server)",
+        "👨 Laptop 2: Bob (Client / Peer)"
     ], horizontal=True)
 
-    lan_ips = get_lan_ips()
-
     if "Alice" in role:
-        st.markdown("### 👩 Laptop 1: Alice (Server)")
-        col_a1, col_a2 = st.columns([1, 1])
-        with col_a1:
-            srv_port = st.number_input("Listen Port", value=5000, min_value=1024, max_value=65535, key="net_srv_port")
-            preset_choice = st.checkbox("Use Textbook Preset (p=23, g=5, a=6)", value=True, key="net_alice_preset")
-        with col_a2:
-            st.markdown("**Detected Usable LAN IPv4 Address(es):**")
-            if lan_ips:
-                for ip in lan_ips:
-                    st.code(f"python network_demo/bob.py --host {ip} --port {srv_port}", language="bash")
-                st.caption("Tell Bob on Laptop 2 to run the command above!")
-            else:
-                st.warning("⚠️ No Wi-Fi LAN IP detected. Connect both laptops to the same Wi-Fi or phone hotspot.")
+        st.markdown("### 👩 Laptop 1: Alice (Host)")
 
-        st.markdown("""
-        <div style="background:rgba(72,187,120,0.1); border:1px solid rgba(72,187,120,0.3); border-radius:10px; padding:0.9rem; margin-bottom:1rem;">
-            <b>🖥️ Recommended: Run Live Terminal on Laptop 1:</b><br>
-            <code>python network_demo/alice.py --port 5000 --preset</code>
+        st.markdown(f"""
+        <div style="background:rgba(72,187,120,0.12); border:2px solid #48bb78; border-radius:10px; padding:1rem; margin-bottom:1.2rem;">
+            <span style="font-size:1.15rem; font-weight:700; color:#68d391;">🎯 Alice's Wi-Fi IP Address: <code>{primary_lan_ip}</code></span><br>
+            <span style="color:#cbd5e1; font-size:0.9rem;">Relay Server is running at: <b>http://{primary_lan_ip}:6000</b> (Tell Bob on Laptop 2 to use this URL)</span>
         </div>
         """, unsafe_allow_html=True)
 
-        if st.button("🚀 Listen for Bob (Wait for Connection – 20s timeout)", type="primary", key="alice_listen_btn"):
-            with st.spinner(f"Alice listening on 0.0.0.0:{srv_port}... Tell Bob to connect now!"):
+        col_cfg1, col_cfg2 = st.columns([2, 1])
+        with col_cfg1:
+            relay_url_alice = st.text_input(
+                "📡 Relay Server URL",
+                value=f"http://{primary_lan_ip}:6000",
+                key="alice_relay_url_input",
+                help="Points to the relay server running on Laptop 1",
+            )
+        with col_cfg2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🔍 Check Relay Status", key="alice_check_relay_btn"):
                 try:
-                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
-                        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                        srv.bind(("0.0.0.0", int(srv_port)))
-                        srv.listen(1)
-                        srv.settimeout(20.0)
-                        conn, addr = srv.accept()
-                        with conn:
-                            # 1. Hello
-                            hello = recv_msg(conn)
-                            # 2. Params
-                            p = TEXTBOOK_P if preset_choice else 23
-                            g = TEXTBOOK_G if preset_choice else 5
-                            send_msg(conn, {"type": "params", "p": p, "g": g})
-                            # 3. Party
-                            alice = Party("Alice", p, g, private_key=TEXTBOOK_A if preset_choice else None)
-                            # 4. Exchange
-                            send_msg(conn, {"type": "public", "name": "Alice", "value": alice.public_key})
-                            b_msg = recv_msg(conn)
-                            bob_val = b_msg["value"]
-                            # 5. Shared secret
-                            alice.receive_public_value(bob_val)
-                            s = alice.compute_shared_secret()
-                            key = derive_key(s)
-                            fp = compute_key_fingerprint(key)
-                            # 6. Confirm
-                            send_msg(conn, {"type": "confirm", "fingerprint": fp})
-                            c_msg = recv_msg(conn)
-                            bob_fp = c_msg.get("fingerprint")
-                            match = "✅ MATCH" if bob_fp == fp else "❌ MISMATCH"
-
-                            st.session_state["net_alice_session"] = {
-                                "addr": f"{addr[0]}:{addr[1]}",
-                                "p": p, "g": g,
-                                "priv": alice.private_key,
-                                "pub": alice.public_key,
-                                "bob_val": bob_val,
-                                "s": s,
-                                "key": key,
-                                "fp": fp,
-                                "bob_fp": bob_fp,
-                                "match": match
-                            }
-                except socket.timeout:
-                    st.warning("⏱️ Listening timed out after 20 seconds. Ensure Bob ran his connection command!")
+                    stat = relay_get(relay_url_alice, "/status")
+                    st.success(f"✅ Relay Online (Uptime: {stat.get('uptime_seconds', 0)}s)")
                 except Exception as e:
-                    st.error(f"❌ Server error: {e}")
+                    st.error(f"❌ Cannot connect to relay ({e}). Run: python network_demo/relay_server.py --port 6000")
 
-        # Render Alice's session if established
+        st.markdown("---")
+        st.markdown("#### 1️⃣ Step 1: Alice Generates & Publishes Public Key")
+
+        col_p1, col_p2, col_p3 = st.columns(3)
+        with col_p1:
+            a_p = st.number_input("Modulus (p)", value=23, min_value=5, key="alice_p_val")
+        with col_p2:
+            a_g = st.number_input("Generator (g)", value=5, min_value=2, key="alice_g_val")
+        with col_p3:
+            a_priv = st.number_input("Alice's Private Key (a)", value=6, min_value=2, max_value=int(a_p)-2, key="alice_priv_val")
+
+        # Alice's public key A = g^a mod p
+        a_pub_computed = mod_exp(int(a_g), int(a_priv), int(a_p))
+
+        col_btn_a1, col_btn_a2 = st.columns([2, 1])
+        with col_btn_a1:
+            if st.button("🚀 Publish Alice's Public Key (A) to Relay", type="primary", key="alice_pub_btn"):
+                try:
+                    payload = {
+                        "party": "alice",
+                        "data": {
+                            "p": int(a_p),
+                            "g": int(a_g),
+                            "pub": a_pub_computed,
+                            "ts": time.strftime("%H:%M:%S")
+                        }
+                    }
+                    relay_post(relay_url_alice, "/handshake", payload)
+                    st.session_state["alice_dh_data"] = {
+                        "p": int(a_p), "g": int(a_g), "priv": int(a_priv), "pub": a_pub_computed
+                    }
+                    st.success(f"✅ Published to Relay! Public parameters: p={a_p}, g={a_g}, A={a_pub_computed}")
+                except Exception as e:
+                    st.error(f"❌ Failed to reach relay: {e}")
+
+        with col_btn_a2:
+            sync_alice = st.button("🔄 Sync with Bob (Check for Bob's Key)", key="alice_sync_btn")
+
+        if sync_alice or "net_alice_session" in st.session_state or "alice_dh_data" in st.session_state:
+            try:
+                hs = relay_get(relay_url_alice, "/handshake")
+                bob_data = hs.get("bob")
+                if bob_data and "alice_dh_data" in st.session_state:
+                    adata = st.session_state["alice_dh_data"]
+                    bob_val = bob_data["pub"]
+                    bob_fp = bob_data.get("fp", "")
+                    # Alice computes shared secret: s = B^a mod p
+                    s = mod_exp(bob_val, adata["priv"], adata["p"])
+                    key = derive_key(s)
+                    fp = compute_key_fingerprint(key)
+                    match = "✅ MATCH" if bob_fp == fp else "❌ MISMATCH"
+
+                    st.session_state["net_alice_session"] = {
+                        "p": adata["p"], "g": adata["g"],
+                        "priv": adata["priv"], "pub": adata["pub"],
+                        "bob_val": bob_val,
+                        "s": s, "key": key, "fp": fp,
+                        "bob_fp": bob_fp, "match": match
+                    }
+            except Exception:
+                pass
+
         if "net_alice_session" in st.session_state:
             asess = st.session_state["net_alice_session"]
-            st.success(f"✅ Bob connected from {asess['addr']}! Handshake Completed.")
             st.markdown(f"""
-            <div class="party-card alice-card">
-                <h3>👩 Alice's Side of the Exchange</h3>
+            <div class="party-card alice-card" style="margin-top:1rem;">
+                <h3>👩 Alice's Cryptographic State</h3>
                 <b>Parameters:</b> p={asess['p']}, g={asess['g']}<br>
-                <b>Alice's Private Key (a):</b> {priv(asess['priv'])}<br>
-                <b>Alice's Public Key (A):</b> {pub(asess['pub'])}<br>
+                <b>Alice's Private Key (a):</b> {priv(asess['priv'])} (Kept secret on Laptop 1)<br>
+                <b>Alice's Public Key (A):</b> {pub(asess['pub'])} = {asess['g']}^{asess['priv']} mod {asess['p']}<br>
                 <b>Received Bob's Public Key (B):</b> {pub(asess['bob_val'])}<br>
                 <b>Shared Secret:</b> <code>s = B^a mod p = {asess['bob_val']}^{asess['priv']} mod {asess['p']} = {asess['s']}</code><br>
-                <b>Derived Key Fingerprint:</b> <code>{asess['fp']}</code><br>
-                <b>Bob's Fingerprint:</b> <code>{asess['bob_fp']}</code> ({asess['match']})
+                <b>Derived Key Fingerprint (SHA-256):</b> <code>{asess['fp']}</code> ({asess['match']})
             </div>
             """, unsafe_allow_html=True)
 
             st.markdown("---")
-            st.markdown("### 💬 Live Encrypted Messaging (Laptop 1: Alice)")
+            st.markdown("#### 💬 Live Encrypted Chat (Alice ↔ Bob)")
 
-            relay_url_a = st.text_input(
-                "📡 Relay Server URL (run `python network_demo/relay_server.py` on this laptop first)",
-                value=f"http://{lan_ips[0] if lan_ips else '127.0.0.1'}:6000",
-                key="relay_url_alice",
-            )
-
-            col_send_a, col_inbox_a = st.columns([3, 1])
-            with col_send_a:
+            col_msg_a, col_ref_a = st.columns([3, 1])
+            with col_msg_a:
                 a_msg_text = st.text_input(
-                    "✍️ Message to send to Bob:",
+                    "✍️ Message for Bob:",
                     value="Hello Bob! Secure channel established over Diffie-Hellman.",
-                    key="alice_msg_input",
+                    key="alice_msg_box"
                 )
-            with col_inbox_a:
+            with col_ref_a:
                 st.markdown("<br>", unsafe_allow_html=True)
-                refresh_a = st.button("🔄 Refresh Inbox", key="alice_refresh_btn")
+                refresh_a = st.button("🔄 Refresh Inbox", key="alice_ref_inbox_btn")
 
-            if st.button("📤 Encrypt & Send to Bob", key="alice_encrypt_btn", type="primary"):
-                ct_bytes = xor_encrypt(asess["key"], a_msg_text.encode("utf-8"))
-                ct_hex = ct_bytes.hex()
-                try:
-                    relay_post(relay_url_a, {"from": "alice", "ciphertext": ct_hex})
-                    entry = {"role": "sent", "plain": a_msg_text, "ct": ct_hex, "ts": time.strftime("%H:%M:%S")}
-                    st.session_state.setdefault("alice_chat", []).append(entry)
-                    st.success(f"📤 Sent! Ciphertext on wire: `{ct_hex[:48]}...`")
-                except Exception as e:
-                    st.error(f"❌ Relay error: {e}. Is relay_server.py running on port 6000?")
+            col_send_a1, col_clear_a2 = st.columns([2, 1])
+            with col_send_a1:
+                if st.button("📤 Encrypt & Send to Bob", key="alice_send_btn", type="primary"):
+                    ct_bytes = xor_encrypt(asess["key"], a_msg_text.encode("utf-8"))
+                    ct_hex = ct_bytes.hex()
+                    try:
+                        relay_post(relay_url_alice, "/send", {"from": "alice", "ciphertext": ct_hex})
+                        entry = {"role": "sent", "plain": a_msg_text, "ct": ct_hex, "ts": time.strftime("%H:%M:%S")}
+                        st.session_state.setdefault("alice_chat", []).append(entry)
+                        st.success(f"📤 Sent! Intercepted Wire Ciphertext: `{ct_hex[:48]}...`")
+                    except Exception as e:
+                        st.error(f"❌ Relay error: {e}")
+
+            with col_clear_a2:
+                if st.button("🗑️ Reset Demo", key="alice_reset_btn"):
+                    try:
+                        relay_post(relay_url_alice, "/clear", {})
+                    except Exception:
+                        pass
+                    st.session_state.pop("net_alice_session", None)
+                    st.session_state.pop("alice_dh_data", None)
+                    st.session_state.pop("alice_chat", None)
+                    st.rerun()
 
             if refresh_a:
                 try:
-                    msgs = relay_get(relay_url_a, "alice")
+                    msgs_resp = relay_get(relay_url_alice, "/messages/alice")
+                    msgs = msgs_resp.get("messages", [])
                     for m in msgs:
                         pt = xor_decrypt(asess["key"], bytes.fromhex(m["ciphertext"])).decode("utf-8", errors="replace")
                         entry = {"role": "recv", "plain": pt, "ct": m["ciphertext"], "ts": m.get("ts", "")}
                         st.session_state.setdefault("alice_chat", []).append(entry)
                     if not msgs:
                         st.info("📭 No new messages from Bob yet.")
+                    else:
+                        st.balloons()
                 except Exception as e:
                     st.error(f"❌ Cannot reach relay: {e}")
 
             # Chat history
             chat_a = st.session_state.get("alice_chat", [])
             if chat_a:
-                st.markdown("**📜 Chat History:**")
+                st.markdown("**📜 Secure Chat Log:**")
                 for entry in reversed(chat_a[-10:]):
                     if entry["role"] == "sent":
                         st.markdown(f"""
                         <div style="background:#1e3a5f; border-left:4px solid #3b82f6; border-radius:8px; padding:0.7rem 1rem; margin:0.3rem 0;">
-                            <span style="color:#93c5fd; font-size:0.8rem;">[{entry.get('ts','')}] 👩 Alice → Bob (Sent)</span><br>
-                            <b>Plaintext:</b> {entry['plain']}<br>
-                            <span style="color:#94a3b8; font-size:0.85rem;">Wire: <code>{entry['ct'][:48]}...</code></span>
+                            <span style="color:#93c5fd; font-size:0.8rem;">[{entry.get('ts','')}] 👩 Alice → Bob (Sent Plaintext)</span><br>
+                            <b style="font-size:1.05rem;">{entry['plain']}</b><br>
+                            <span style="color:#94a3b8; font-size:0.82rem;">Wire Ciphertext: <code>{entry['ct']}</code></span>
                         </div>""", unsafe_allow_html=True)
                     else:
                         st.markdown(f"""
                         <div style="background:#1a3a2f; border-left:4px solid #10b981; border-radius:8px; padding:0.7rem 1rem; margin:0.3rem 0;">
-                            <span style="color:#6ee7b7; font-size:0.8rem;">[{entry.get('ts','')}] 👨 Bob → Alice (Received)</span><br>
-                            <b>Plaintext:</b> {entry['plain']}<br>
-                            <span style="color:#94a3b8; font-size:0.85rem;">Wire: <code>{entry['ct'][:48]}...</code></span>
+                            <span style="color:#6ee7b7; font-size:0.8rem;">[{entry.get('ts','')}] 👨 Bob → Alice (Decrypted from Wire)</span><br>
+                            <b style="font-size:1.05rem; color:#68d391;">{entry['plain']}</b><br>
+                            <span style="color:#94a3b8; font-size:0.82rem;">Wire Ciphertext: <code>{entry['ct']}</code></span>
                         </div>""", unsafe_allow_html=True)
 
+        elif "alice_dh_data" in st.session_state:
+            st.info("⏳ Alice's public key is published! Tell Bob on Laptop 2 to click 'Fetch Alice's Parameters & Send Bob's Key'. Then click 'Sync with Bob' above.")
+
     else:
-        st.markdown("### 👨 Laptop 2: Bob (Client)")
-        col_b1, col_b2 = st.columns([1, 1])
-        with col_b1:
-            target_ip = st.text_input("Alice's IP Address (Laptop 1)", value=lan_ips[0] if lan_ips else "127.0.0.1", key="net_alice_ip")
-            target_port = st.number_input("Alice's Port", value=5000, min_value=1024, max_value=65535, key="net_bob_port")
-            preset_bob = st.checkbox("Use Textbook Preset (b=15)", value=True, key="net_bob_preset")
-        with col_b2:
-            st.markdown("**Pre-Flight Connectivity Test:**")
-            if st.button("🔍 Test Connection to Alice", key="test_conn_btn"):
+        st.markdown("### 👨 Laptop 2: Bob (Client / Peer)")
+
+        col_b_url, col_b_tst = st.columns([2, 1])
+        with col_b_url:
+            relay_url_bob = st.text_input(
+                "📡 Alice's Relay Server URL (from Laptop 1)",
+                value=f"http://{primary_lan_ip}:6000",
+                key="bob_relay_url_input",
+                help="Enter http://<ALICE_IP>:6000 as displayed on Alice's Laptop 1",
+            )
+        with col_b_tst:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("🔍 Test Connection to Alice", key="bob_test_conn_btn"):
                 try:
-                    s_test = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    s_test.settimeout(2.0)
-                    s_test.connect((target_ip, int(target_port)))
-                    s_test.close()
-                    st.success(f"✅ Reachable! Port {target_port} on {target_ip} is open and ready.")
+                    stat = relay_get(relay_url_bob, "/status")
+                    st.success(f"✅ Connected to Alice's Relay! (Uptime: {stat.get('uptime_seconds', 0)}s)")
                 except Exception as e:
-                    st.error(f"❌ Cannot connect ({e}). Check Wi-Fi, IP, and Alice's firewall.")
+                    st.error(f"❌ Cannot connect ({e}). Make sure both laptops are on the same Wi-Fi / hotspot.")
 
-        st.markdown(f"""
-        <div style="background:rgba(99,179,237,0.1); border:1px solid rgba(99,179,237,0.3); border-radius:10px; padding:0.9rem; margin-bottom:1rem;">
-            <b>🖥️ Recommended: Run Live Terminal on Laptop 2:</b><br>
-            <code>python network_demo/bob.py --host {target_ip} --port {target_port} --preset</code>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("---")
+        st.markdown("#### 2️⃣ Step 2: Bob Fetches Alice's Key & Completes Handshake")
 
-        if st.button("🚀 Connect to Alice & Run Handshake", type="primary", key="bob_connect_btn"):
-            with st.spinner(f"Connecting to Alice at {target_ip}:{target_port}..."):
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(5.0)
-                    sock.connect((target_ip, int(target_port)))
-                    with sock:
-                        # 1. Hello
-                        send_msg(sock, {"type": "hello", "from": "Bob"})
-                        # 2. Params
-                        p_msg = recv_msg(sock)
-                        p, g = p_msg["p"], p_msg["g"]
-                        if not miller_rabin_is_prime(p):
-                            st.error(f"❌ SECURITY ALERT: Modulus p={p} is NOT prime! Bob aborts.")
-                            st.stop()
-                        # 3. Party
-                        bob = Party("Bob", p, g, private_key=TEXTBOOK_B if preset_bob else None)
-                        # 4. Exchange
-                        a_msg = recv_msg(sock)
-                        alice_val = a_msg["value"]
-                        send_msg(sock, {"type": "public", "name": "Bob", "value": bob.public_key})
-                        # 5. Secret
-                        bob.receive_public_value(alice_val)
-                        s = bob.compute_shared_secret()
-                        key = derive_key(s)
-                        fp = compute_key_fingerprint(key)
-                        # 6. Confirm
-                        conf_msg = recv_msg(sock)
-                        alice_fp = conf_msg["fingerprint"]
-                        send_msg(sock, {"type": "confirm", "fingerprint": fp})
-                        match = "✅ MATCH" if alice_fp == fp else "❌ MISMATCH"
+        preset_b = st.checkbox("Use Textbook Preset Private Key (b=15)", value=True, key="bob_preset_choice")
+        custom_b = st.number_input("Custom Bob Private Key (b)", value=15, min_value=2, key="bob_custom_b") if not preset_b else 15
 
-                        st.session_state["net_bob_session"] = {
-                            "target": f"{target_ip}:{target_port}",
-                            "p": p, "g": g,
-                            "priv": bob.private_key,
-                            "pub": bob.public_key,
-                            "alice_val": alice_val,
-                            "s": s,
-                            "key": key,
+        if st.button("🚀 Fetch Alice's Parameters & Complete Handshake", type="primary", key="bob_fetch_btn"):
+            try:
+                hs = relay_get(relay_url_bob, "/handshake")
+                alice_data = hs.get("alice")
+                if not alice_data:
+                    st.warning("⏳ Alice has not published her public key yet. Tell Alice to click Step 1 on Laptop 1!")
+                else:
+                    p = alice_data["p"]
+                    g = alice_data["g"]
+                    alice_val = alice_data["pub"]
+
+                    # 1. Verify primality
+                    if not miller_rabin_is_prime(p):
+                        st.error(f"❌ SECURITY ALERT: Modulus p={p} is NOT prime! Bob aborts.")
+                        st.stop()
+
+                    # 2. Bob picks private key
+                    b_priv = 15 if preset_b else int(custom_b)
+
+                    # 3. Bob computes public key B = g^b mod p
+                    b_pub = mod_exp(g, b_priv, p)
+
+                    # 4. Bob computes shared secret s = A^b mod p
+                    s = mod_exp(alice_val, b_priv, p)
+
+                    # 5. Derive key & fingerprint
+                    key = derive_key(s)
+                    fp = compute_key_fingerprint(key)
+
+                    # 6. Publish Bob's public key B and fingerprint to relay
+                    relay_post(relay_url_bob, "/handshake", {
+                        "party": "bob",
+                        "data": {
+                            "pub": b_pub,
                             "fp": fp,
-                            "alice_fp": alice_fp,
-                            "match": match
+                            "ts": time.strftime("%H:%M:%S")
                         }
-                except Exception as e:
-                    st.error(f"❌ Connection failed: {e}. Check IP and firewall!")
+                    })
 
-        # Render Bob's session if established
+                    st.session_state["net_bob_session"] = {
+                        "p": p, "g": g,
+                        "priv": b_priv, "pub": b_pub,
+                        "alice_val": alice_val,
+                        "s": s, "key": key, "fp": fp
+                    }
+                    st.success("🎉 Handshake completed! Shared key derived and published.")
+            except Exception as e:
+                st.error(f"❌ Handshake failed: {e}")
+
         if "net_bob_session" in st.session_state:
             bsess = st.session_state["net_bob_session"]
-            st.success(f"✅ Handshake Completed with Alice at {bsess['target']}!")
             st.markdown(f"""
-            <div class="party-card bob-card">
-                <h3>👨 Bob's Side of the Exchange</h3>
-                <b>Parameters Received & Verified:</b> p={bsess['p']} (Prime ✓), g={bsess['g']}<br>
-                <b>Bob's Private Key (b):</b> {priv(bsess['priv'])}<br>
-                <b>Bob's Public Key (B):</b> {pub(bsess['pub'])}<br>
+            <div class="party-card bob-card" style="margin-top:1rem;">
+                <h3>👨 Bob's Cryptographic State</h3>
+                <b>Parameters Received:</b> p={bsess['p']} (Prime Verified ✓), g={bsess['g']}<br>
+                <b>Bob's Private Key (b):</b> {priv(bsess['priv'])} (Kept secret on Laptop 2)<br>
                 <b>Received Alice's Public Key (A):</b> {pub(bsess['alice_val'])}<br>
+                <b>Bob's Public Key (B):</b> {pub(bsess['pub'])} = {bsess['g']}^{bsess['priv']} mod {bsess['p']}<br>
                 <b>Shared Secret:</b> <code>s = A^b mod p = {bsess['alice_val']}^{bsess['priv']} mod {bsess['p']} = {bsess['s']}</code><br>
-                <b>Derived Key Fingerprint:</b> <code>{bsess['fp']}</code><br>
-                <b>Alice's Fingerprint:</b> <code>{bsess['alice_fp']}</code> ({bsess['match']})
+                <b>Derived Key Fingerprint (SHA-256):</b> <code>{bsess['fp']}</code>
             </div>
             """, unsafe_allow_html=True)
 
             st.markdown("---")
-            st.markdown("### 💬 Live Encrypted Messaging (Laptop 2: Bob)")
+            st.markdown("#### 💬 Live Encrypted Chat (Bob ↔ Alice)")
 
-            relay_url_b = st.text_input(
-                "📡 Relay Server URL (Alice's IP, port 6000)",
-                value=f"http://{bsess['target'].split(':')[0]}:6000",
-                key="relay_url_bob",
-            )
-
-            col_send_b, col_inbox_b = st.columns([3, 1])
-            with col_send_b:
+            col_msg_b, col_ref_b = st.columns([3, 1])
+            with col_msg_b:
                 b_msg_text = st.text_input(
-                    "✍️ Message to send to Alice:",
-                    value="Hi Alice! Received and verified over the secure channel.",
-                    key="bob_msg_input",
+                    "✍️ Message for Alice:",
+                    value="Hi Alice! Decrypted successfully using our Diffie-Hellman secret key.",
+                    key="bob_msg_box"
                 )
-            with col_inbox_b:
+            with col_ref_b:
                 st.markdown("<br>", unsafe_allow_html=True)
-                refresh_b = st.button("🔄 Refresh Inbox", key="bob_refresh_btn")
+                refresh_b = st.button("🔄 Refresh Inbox", key="bob_ref_inbox_btn")
 
-            if st.button("📤 Encrypt & Send to Alice", key="bob_encrypt_btn", type="primary"):
-                ct_bytes = xor_encrypt(bsess["key"], b_msg_text.encode("utf-8"))
-                ct_hex = ct_bytes.hex()
-                try:
-                    relay_post(relay_url_b, {"from": "bob", "ciphertext": ct_hex})
-                    entry = {"role": "sent", "plain": b_msg_text, "ct": ct_hex, "ts": time.strftime("%H:%M:%S")}
-                    st.session_state.setdefault("bob_chat", []).append(entry)
-                    st.success(f"📤 Sent! Ciphertext on wire: `{ct_hex[:48]}...`")
-                except Exception as e:
-                    st.error(f"❌ Relay error: {e}. Is relay_server.py running on Laptop 1 port 6000?")
+            col_send_b1, col_clear_b2 = st.columns([2, 1])
+            with col_send_b1:
+                if st.button("📤 Encrypt & Send to Alice", key="bob_send_btn", type="primary"):
+                    ct_bytes = xor_encrypt(bsess["key"], b_msg_text.encode("utf-8"))
+                    ct_hex = ct_bytes.hex()
+                    try:
+                        relay_post(relay_url_bob, "/send", {"from": "bob", "ciphertext": ct_hex})
+                        entry = {"role": "sent", "plain": b_msg_text, "ct": ct_hex, "ts": time.strftime("%H:%M:%S")}
+                        st.session_state.setdefault("bob_chat", []).append(entry)
+                        st.success(f"📤 Sent! Intercepted Wire Ciphertext: `{ct_hex[:48]}...`")
+                    except Exception as e:
+                        st.error(f"❌ Relay error: {e}")
+
+            with col_clear_b2:
+                if st.button("🗑️ Reset Demo", key="bob_reset_btn"):
+                    try:
+                        relay_post(relay_url_bob, "/clear", {})
+                    except Exception:
+                        pass
+                    st.session_state.pop("net_bob_session", None)
+                    st.session_state.pop("bob_chat", None)
+                    st.rerun()
 
             if refresh_b:
                 try:
-                    msgs = relay_get(relay_url_b, "bob")
+                    msgs_resp = relay_get(relay_url_bob, "/messages/bob")
+                    msgs = msgs_resp.get("messages", [])
                     for m in msgs:
                         pt = xor_decrypt(bsess["key"], bytes.fromhex(m["ciphertext"])).decode("utf-8", errors="replace")
                         entry = {"role": "recv", "plain": pt, "ct": m["ciphertext"], "ts": m.get("ts", "")}
@@ -1133,35 +1163,40 @@ elif demo_tab == "🌐 Network Demo":
             # Chat history
             chat_b = st.session_state.get("bob_chat", [])
             if chat_b:
-                st.markdown("**📜 Chat History:**")
+                st.markdown("**📜 Secure Chat Log:**")
                 for entry in reversed(chat_b[-10:]):
                     if entry["role"] == "sent":
                         st.markdown(f"""
                         <div style="background:#1a3a2f; border-left:4px solid #10b981; border-radius:8px; padding:0.7rem 1rem; margin:0.3rem 0;">
-                            <span style="color:#6ee7b7; font-size:0.8rem;">[{entry.get('ts','')}] 👨 Bob → Alice (Sent)</span><br>
-                            <b>Plaintext:</b> {entry['plain']}<br>
-                            <span style="color:#94a3b8; font-size:0.85rem;">Wire: <code>{entry['ct'][:48]}...</code></span>
+                            <span style="color:#6ee7b7; font-size:0.8rem;">[{entry.get('ts','')}] 👨 Bob → Alice (Sent Plaintext)</span><br>
+                            <b style="font-size:1.05rem;">{entry['plain']}</b><br>
+                            <span style="color:#94a3b8; font-size:0.82rem;">Wire Ciphertext: <code>{entry['ct']}</code></span>
                         </div>""", unsafe_allow_html=True)
                     else:
                         st.markdown(f"""
                         <div style="background:#1e3a5f; border-left:4px solid #3b82f6; border-radius:8px; padding:0.7rem 1rem; margin:0.3rem 0;">
-                            <span style="color:#93c5fd; font-size:0.8rem;">[{entry.get('ts','')}] 👩 Alice → Bob (Received)</span><br>
-                            <b>Plaintext:</b> {entry['plain']}<br>
-                            <span style="color:#94a3b8; font-size:0.85rem;">Wire: <code>{entry['ct'][:48]}...</code></span>
+                            <span style="color:#93c5fd; font-size:0.8rem;">[{entry.get('ts','')}] 👩 Alice → Bob (Decrypted from Wire)</span><br>
+                            <b style="font-size:1.05rem; color:#93c5fd;">{entry['plain']}</b><br>
+                            <span style="color:#94a3b8; font-size:0.82rem;">Wire Ciphertext: <code>{entry['ct']}</code></span>
                         </div>""", unsafe_allow_html=True)
 
     st.markdown("---")
-    with st.expander("📡 Wire Protocol Details (Length-Prefixed Framing)", expanded=False):
-        st.markdown("""
-        ### Length-Prefixed Framing Specification
-        Each network message begins with a **4-byte big-endian unsigned integer** indicating payload byte count:
+    with st.expander("🖥️ Alternative: Pure Terminal CLI Demo (Raw TCP Sockets on Port 5000)", expanded=False):
+        st.markdown(f"""
+        Evaluators can also run the raw TCP socket CLI demonstration in PowerShell / Terminal:
+        
+        **Laptop 1 (Alice Server):**
+        ```bash
+        python network_demo/alice.py --port 5000 --preset --show-wire
         ```
-        +-------------------------+----------------------------------+
-        |  4-Byte Length Header   |       UTF-8 JSON Payload         |
-        |  struct.pack('>I', len) |  {"type": "params", "p": 23, ..} |
-        +-------------------------+----------------------------------+
+        
+        **Laptop 2 (Bob Client):**
+        ```bash
+        python network_demo/bob.py --host {primary_lan_ip} --port 5000 --preset --show-wire
         ```
-        **Security Guarantee:** Private keys ($a, b$) and shared secret ($s$) are **never transmitted**. Only public values ($p, g, A, B$), confirmation fingerprints, and encrypted ciphertext cross the wire.
+        - Uses 4-byte big-endian length-prefixed framing: `struct.pack('>I', len)`.
+        - Prints raw wire JSON payloads in real time.
+        - Direct peer-to-peer TCP connection over port 5000.
         """)
 
 

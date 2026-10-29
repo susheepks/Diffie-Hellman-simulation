@@ -17,7 +17,10 @@ from typing import Any, Optional
 
 
 def get_lan_ips() -> list[str]:
-    """Return all usable IPv4 LAN addresses (excluding 127.0.0.1 and link-local)."""
+    """Return all usable IPv4 LAN addresses (excluding 127.0.0.1 and link-local).
+    The primary outbound routable IP (e.g. Wi-Fi / Hotspot) is always first.
+    """
+    primary_ip: Optional[str] = None
     ips = set()
     # Strategy 1: Outbound UDP route check (most reliable for primary LAN IP)
     try:
@@ -25,6 +28,7 @@ def get_lan_ips() -> list[str]:
             s.connect(("8.8.8.8", 80))
             ip = s.getsockname()[0]
             if not ip.startswith("127.") and not ip.startswith("169.254."):
+                primary_ip = ip
                 ips.add(ip)
     except Exception:
         pass
@@ -39,7 +43,11 @@ def get_lan_ips() -> list[str]:
     except Exception:
         pass
 
-    return sorted(list(ips))
+    # Ensure primary outbound LAN IP is always first, then others sorted
+    other_ips = sorted([ip for ip in ips if ip != primary_ip])
+    if primary_ip:
+        return [primary_ip] + other_ips
+    return other_ips
 
 
 def recv_exact(sock: socket.socket, num_bytes: int) -> bytes:

@@ -153,21 +153,31 @@ python network_demo/bob.py --host <ALICE_IP> --port 5000 --show-wire
 
 ---
 
-## 🌐 Step 5: Web UI Alternative (Streamlit on Laptop 2)
+## 🌐 Step 5: Web UI Real-Time Demo (Streamlit on Laptop 2)
 
-If the evaluator prefers the web browser interface on Laptop 2:
+If demonstrating in the browser interface on Laptop 2:
 
-1. Launch Streamlit:
+1. Launch Streamlit on Laptop 2:
    ```bash
    streamlit run app.py
    ```
 2. Open browser at `http://localhost:8501`.
 3. In the sidebar, select **🌐 Network Demo**.
-4. Select Role: **👨 Laptop 2: Bob (Client)**.
-5. In **Alice's IP Address**, enter `<ALICE_IP>` (e.g., `172.20.10.3`).
-6. Click **🔍 Test Connection to Alice** -> must show green success badge.
-7. Click **🚀 Connect to Alice & Run Handshake**.
-8. The UI renders Bob's card showing received public values, local secret computation ($s=2$), and key confirmation status.
+4. Select Role: **👨 Laptop 2: Bob (Client / Peer)**.
+5. In **Alice's Relay Server URL**, ensure it is set to Alice's IP on port 6000:
+   `http://<ALICE_IP>:6000` (e.g., `http://172.20.10.3:6000`).
+6. Click **🔍 Test Connection to Alice** → shows green success badge confirming relay reachability.
+7. Click **🚀 Step 2: Fetch Alice's Parameters & Complete Handshake**:
+   - Bob fetches Alice's public parameters ($p=23, g=5, A=8$).
+   - Bob verifies $p=23$ is prime with Miller-Rabin.
+   - Bob picks private key $b=15$ and computes public key $B = g^b \bmod p = 4$.
+   - Bob computes shared secret $s = A^b \bmod p = 8^{15} \bmod 23 = 2$.
+   - Bob derives 256-bit key and publishes $B=4$ with fingerprint `fbef1743`.
+   - UI renders green party card showing verified parameters, computed secret $s=2$, and fingerprint.
+8. **Live Bidirectional Encrypted Chat**:
+   - Click **🔄 Refresh Inbox** → receives Alice's message, auto-decrypts using shared key $s=2$, and triggers celebration balloons!
+   - Type a response in **Message for Alice** → click **📤 Encrypt & Send to Alice**.
+   - Observe that only the hex ciphertext travels across the Wi-Fi. Alice refreshes her inbox on Laptop 1 to decrypt and read your reply!
 
 ---
 

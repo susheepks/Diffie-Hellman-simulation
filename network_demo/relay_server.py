@@ -29,28 +29,23 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from threading import Lock
 from urllib.parse import urlparse
 
-# ── Global mailboxes (thread-safe with lock) ─────────────────────────────────
+# ── Global mailboxes & handshake state (thread-safe with lock) ───────────────
 _lock = Lock()
 _mailbox: dict[str, list[dict]] = {"alice": [], "bob": []}
+_handshake: dict[str, Optional[dict]] = {"alice": None, "bob": None}
 _start_time = time.time()
 
 
 def _get_lan_ips() -> list[str]:
-    ips = []
     try:
-        for info in socket.getaddrinfo(socket.gethostname(), None):
-            ip = info[4][0]
-            if ":" not in ip and not ip.startswith("127."):
-                if ip not in ips:
-                    ips.append(ip)
+        from dh.transport import get_lan_ips
+        return get_lan_ips()
     except Exception:
-        pass
-    return ips
+        return []
 
 
 class RelayHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
-        # Custom log with timestamp
         ts = time.strftime("%H:%M:%S")
         sys.stdout.write(f"[{ts}] RELAY {fmt % args}\n")
         sys.stdout.flush()
@@ -89,6 +84,16 @@ class RelayHandler(BaseHTTPRequestHandler):
                     "uptime_seconds": round(time.time() - _start_time, 1),
                     "pending_for_alice": len(_mailbox["alice"]),
                     "pending_for_bob": len(_mailbox["bob"]),
+                    "handshake_alice": _handshake["alice"] is not None,
+                    "handshake_bob": _handshake["bob"] is not None,
+                })
+            return
+
+        if path == "/handshake":
+            with _lock:
+                self._send_json(200, {
+                    "alice": _handshake["alice"],
+                    "bob": _handshake["bob"],
                 })
             return
 
@@ -107,6 +112,19 @@ class RelayHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path.rstrip("/")
+
+        if path == "/handshake":
+            body = self._read_body()
+            party = body.get("party", "").lower()
+            data = body.get("data", {})
+            if party not in ("alice", "bob"):
+                self._send_json(400, {"error": "party must be 'alice' or 'bob'"})
+                return
+            with _lock:
+                _handshake[party] = data
+            self.log_message(f"[HANDSHAKE] {party.upper()} published public key")
+            self._send_json(200, {"ok": True, "party": party})
+            return
 
         if path == "/send":
             body = self._read_body()
@@ -135,11 +153,13 @@ class RelayHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "queued_for": recipient})
             return
 
-        if path == "/clear":
+        if path in ("/clear", "/handshake/reset"):
             with _lock:
                 _mailbox["alice"] = []
                 _mailbox["bob"] = []
-            self._send_json(200, {"ok": True, "message": "All mailboxes cleared"})
+                _handshake["alice"] = None
+                _handshake["bob"] = None
+            self._send_json(200, {"ok": True, "message": "All mailboxes and handshake cleared"})
             return
 
         self._send_json(404, {"error": "Not found"})
