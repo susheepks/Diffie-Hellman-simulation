@@ -16,13 +16,25 @@ from datetime import datetime
 from typing import Any, Optional
 
 
+def is_virtual_ip(ip: str) -> bool:
+    """Check if an IPv4 address belongs to a known virtual switch (WSL, Hyper-V, Docker, VirtualBox)."""
+    parts = ip.split(".")
+    if len(parts) == 4:
+        if parts[0] == "172" and parts[1] in ("17", "18", "19", "28", "29", "30", "31"):
+            return True
+        if parts[0] == "192" and parts[1] == "168" and parts[2] == "56":
+            return True
+    return False
+
+
 def get_lan_ips() -> list[str]:
     """Return all usable IPv4 LAN addresses (excluding 127.0.0.1 and link-local).
-    The primary outbound routable IP (e.g. Wi-Fi / Hotspot) is always first.
+    The physical Wi-Fi / Hotspot IP is always prioritized at index 0.
     """
     primary_ip: Optional[str] = None
     ips = set()
-    # Strategy 1: Outbound UDP route check (most reliable for primary LAN IP)
+
+    # Strategy 1: Outbound UDP route check
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.connect(("8.8.8.8", 80))
@@ -43,11 +55,20 @@ def get_lan_ips() -> list[str]:
     except Exception:
         pass
 
-    # Ensure primary outbound LAN IP is always first, then others sorted
-    other_ips = sorted([ip for ip in ips if ip != primary_ip])
-    if primary_ip:
-        return [primary_ip] + other_ips
-    return other_ips
+    # Separate physical Wi-Fi IPs from virtual Hyper-V/WSL switch IPs
+    physical_ips = [ip for ip in ips if not is_virtual_ip(ip)]
+    virtual_ips = [ip for ip in ips if is_virtual_ip(ip)]
+
+    # If primary_ip was physical, put it first
+    if primary_ip and primary_ip in physical_ips:
+        physical_ips.remove(primary_ip)
+        result = [primary_ip] + sorted(physical_ips) + sorted(virtual_ips)
+    elif physical_ips:
+        result = sorted(physical_ips) + sorted(virtual_ips)
+    else:
+        result = sorted(virtual_ips)
+
+    return result
 
 
 def recv_exact(sock: socket.socket, num_bytes: int) -> bytes:

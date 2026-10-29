@@ -18,6 +18,7 @@ Features
 
 from __future__ import annotations
 
+import json
 import socket
 import sys
 import time
@@ -803,8 +804,13 @@ elif demo_tab == "🦹 Man-in-the-Middle":
 # ──────────────────────────────────────────────────────────────────────────────
 
 elif demo_tab == "🌐 Network Demo":
+    import json
     import urllib.request
     import urllib.error
+    import importlib
+    import dh.transport
+    importlib.reload(dh.transport)
+    from dh.transport import get_lan_ips
 
     def relay_post(relay_url: str, path: str, data: dict) -> dict:
         """POST JSON to relay server."""
@@ -833,7 +839,9 @@ elif demo_tab == "🌐 Network Demo":
     """)
 
     lan_ips = get_lan_ips()
-    primary_lan_ip = lan_ips[0] if lan_ips else "172.20.10.3"
+    # Filter out virtual adapter IPs (like WSL / Hyper-V 172.18.x.x)
+    physical_ips = [ip for ip in lan_ips if not ip.startswith("172.18.") and not ip.startswith("172.17.")]
+    primary_lan_ip = physical_ips[0] if physical_ips else (lan_ips[0] if lan_ips else "172.20.10.3")
 
     role = st.radio("Select This Laptop's Role:", [
         "👩 Laptop 1: Alice (Host / Server)",
