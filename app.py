@@ -873,23 +873,76 @@ elif demo_tab == "🌐 Network Demo":
                             bob_fp = c_msg.get("fingerprint")
                             match = "✅ MATCH" if bob_fp == fp else "❌ MISMATCH"
 
-                            st.success(f"✅ Bob connected from {addr[0]}:{addr[1]}! Handshake Completed.")
-                            st.markdown(f"""
-                            <div class="party-card alice-card">
-                                <h3>👩 Alice's Side of the Exchange</h3>
-                                <b>Parameters:</b> p={p}, g={g}<br>
-                                <b>Alice's Private Key (a):</b> {priv(alice.private_key)}<br>
-                                <b>Alice's Public Key (A):</b> {pub(alice.public_key)}<br>
-                                <b>Received Bob's Public Key (B):</b> {pub(bob_val)}<br>
-                                <b>Shared Secret:</b> <code>s = B^a mod p = {bob_val}^{alice.private_key} mod {p} = {s}</code><br>
-                                <b>Derived Key Fingerprint:</b> <code>{fp}</code><br>
-                                <b>Bob's Fingerprint:</b> <code>{bob_fp}</code> ({match})
-                            </div>
-                            """, unsafe_allow_html=True)
+                            st.session_state["net_alice_session"] = {
+                                "addr": f"{addr[0]}:{addr[1]}",
+                                "p": p, "g": g,
+                                "priv": alice.private_key,
+                                "pub": alice.public_key,
+                                "bob_val": bob_val,
+                                "s": s,
+                                "key": key,
+                                "fp": fp,
+                                "bob_fp": bob_fp,
+                                "match": match
+                            }
                 except socket.timeout:
                     st.warning("⏱️ Listening timed out after 20 seconds. Ensure Bob ran his connection command!")
                 except Exception as e:
                     st.error(f"❌ Server error: {e}")
+
+        # Render Alice's session if established
+        if "net_alice_session" in st.session_state:
+            asess = st.session_state["net_alice_session"]
+            st.success(f"✅ Bob connected from {asess['addr']}! Handshake Completed.")
+            st.markdown(f"""
+            <div class="party-card alice-card">
+                <h3>👩 Alice's Side of the Exchange</h3>
+                <b>Parameters:</b> p={asess['p']}, g={asess['g']}<br>
+                <b>Alice's Private Key (a):</b> {priv(asess['priv'])}<br>
+                <b>Alice's Public Key (A):</b> {pub(asess['pub'])}<br>
+                <b>Received Bob's Public Key (B):</b> {pub(asess['bob_val'])}<br>
+                <b>Shared Secret:</b> <code>s = B^a mod p = {asess['bob_val']}^{asess['priv']} mod {asess['p']} = {asess['s']}</code><br>
+                <b>Derived Key Fingerprint:</b> <code>{asess['fp']}</code><br>
+                <b>Bob's Fingerprint:</b> <code>{asess['bob_fp']}</code> ({asess['match']})
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown("### 💬 Live Encrypted Messaging (Laptop 1: Alice)")
+            st.markdown("Test encrypting your custom messages using the shared key derived from $s = 2$:")
+
+            tab_a_send, tab_a_recv = st.tabs(["📤 Send Encrypted Message to Bob", "📥 Decrypt Ciphertext from Bob"])
+
+            with tab_a_send:
+                a_msg_text = st.text_input("Enter message to send to Bob:", 
+                                           value="Hello Bob! Secure channel established over Diffie-Hellman.", 
+                                           key="alice_msg_input")
+                if st.button("🔐 Encrypt with Shared Key", key="alice_encrypt_btn", type="primary"):
+                    ct_bytes = xor_encrypt(asess["key"], a_msg_text.encode("utf-8"))
+                    ct_hex = ct_bytes.hex()
+                    st.markdown(f"""
+                    <div style="background:#1e293b; border:1px solid #3b82f6; border-radius:10px; padding:1.2rem; margin-top:0.8rem;">
+                        <h4 style="color:#60a5fa; margin-top:0;">🔐 Encryption Summary</h4>
+                        <b>Plaintext Message:</b> <span style="color:#f8fafc; font-size:1.05rem;">{a_msg_text}</span><br>
+                        <b>Shared Key:</b> <code>{asess['key'].hex()[:32]}... (SHA-256 derived from s={asess['s']})</code><br>
+                        <b>Ciphertext sent over the wire (What Eve sees):</b><br>
+                        <code style="color:#f87171; font-size:1rem; word-break:break-all;">{ct_hex}</code><br><br>
+                        <span style="color:#94a3b8; font-size:0.9rem;">
+                            📋 <b>Copy the red ciphertext above</b> and paste it into Bob's "Decrypt Ciphertext" box on Laptop 2!
+                        </span>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            with tab_a_recv:
+                st.caption("Paste the hex ciphertext received from Bob on Laptop 2:")
+                b_hex_in = st.text_area("Bob's Ciphertext (Hex):", key="alice_recv_hex", height=70)
+                if st.button("🔓 Decrypt with Alice's Key", key="alice_decrypt_btn"):
+                    if b_hex_in.strip():
+                        try:
+                            pt = xor_decrypt(asess["key"], bytes.fromhex(b_hex_in.strip())).decode("utf-8", errors="replace")
+                            st.success(f"📩 **Decrypted Message from Bob**: {pt}")
+                        except Exception as e:
+                            st.error(f"Decryption error: {e}")
 
     else:
         st.markdown("### 👨 Laptop 2: Bob (Client)")
@@ -949,21 +1002,72 @@ elif demo_tab == "🌐 Network Demo":
                         send_msg(sock, {"type": "confirm", "fingerprint": fp})
                         match = "✅ MATCH" if alice_fp == fp else "❌ MISMATCH"
 
-                        st.success(f"✅ Handshake Completed with Alice at {target_ip}:{target_port}!")
-                        st.markdown(f"""
-                        <div class="party-card bob-card">
-                            <h3>👨 Bob's Side of the Exchange</h3>
-                            <b>Parameters Received & Verified:</b> p={p} (Prime ✓), g={g}<br>
-                            <b>Bob's Private Key (b):</b> {priv(bob.private_key)}<br>
-                            <b>Bob's Public Key (B):</b> {pub(bob.public_key)}<br>
-                            <b>Received Alice's Public Key (A):</b> {pub(alice_val)}<br>
-                            <b>Shared Secret:</b> <code>s = A^b mod p = {alice_val}^{bob.private_key} mod {p} = {s}</code><br>
-                            <b>Derived Key Fingerprint:</b> <code>{fp}</code><br>
-                            <b>Alice's Fingerprint:</b> <code>{alice_fp}</code> ({match})
-                        </div>
-                        """, unsafe_allow_html=True)
+                        st.session_state["net_bob_session"] = {
+                            "target": f"{target_ip}:{target_port}",
+                            "p": p, "g": g,
+                            "priv": bob.private_key,
+                            "pub": bob.public_key,
+                            "alice_val": alice_val,
+                            "s": s,
+                            "key": key,
+                            "fp": fp,
+                            "alice_fp": alice_fp,
+                            "match": match
+                        }
                 except Exception as e:
                     st.error(f"❌ Connection failed: {e}. Check IP and firewall!")
+
+        # Render Bob's session if established
+        if "net_bob_session" in st.session_state:
+            bsess = st.session_state["net_bob_session"]
+            st.success(f"✅ Handshake Completed with Alice at {bsess['target']}!")
+            st.markdown(f"""
+            <div class="party-card bob-card">
+                <h3>👨 Bob's Side of the Exchange</h3>
+                <b>Parameters Received & Verified:</b> p={bsess['p']} (Prime ✓), g={bsess['g']}<br>
+                <b>Bob's Private Key (b):</b> {priv(bsess['priv'])}<br>
+                <b>Bob's Public Key (B):</b> {pub(bsess['pub'])}<br>
+                <b>Received Alice's Public Key (A):</b> {pub(bsess['alice_val'])}<br>
+                <b>Shared Secret:</b> <code>s = A^b mod p = {bsess['alice_val']}^{bsess['priv']} mod {bsess['p']} = {bsess['s']}</code><br>
+                <b>Derived Key Fingerprint:</b> <code>{bsess['fp']}</code><br>
+                <b>Alice's Fingerprint:</b> <code>{bsess['alice_fp']}</code> ({bsess['match']})
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("---")
+            st.markdown("### 💬 Live Encrypted Messaging (Laptop 2: Bob)")
+            st.markdown("Test encrypting and decrypting confidential messages using the shared key derived from $s = 2$:")
+
+            tab_b_recv, tab_b_send = st.tabs(["📥 Decrypt Ciphertext from Alice", "📤 Send Encrypted Reply to Alice"])
+
+            with tab_b_recv:
+                st.caption("Paste the red hex ciphertext generated by Alice on Laptop 1:")
+                a_hex_in = st.text_area("Alice's Ciphertext (Hex):", key="bob_recv_hex", height=70)
+                if st.button("🔓 Decrypt with Bob's Key", key="bob_decrypt_btn", type="primary"):
+                    if a_hex_in.strip():
+                        try:
+                            pt = xor_decrypt(bsess["key"], bytes.fromhex(a_hex_in.strip())).decode("utf-8", errors="replace")
+                            st.success(f"📩 **Decrypted Message from Alice**: {pt}")
+                            st.balloons()
+                        except Exception as e:
+                            st.error(f"Decryption error: {e}")
+
+            with tab_b_send:
+                b_msg_text = st.text_input("Enter reply to send to Alice:", 
+                                           value="Hi Alice! Received and verified over the secure channel.", 
+                                           key="bob_msg_input")
+                if st.button("🔐 Encrypt Reply with Shared Key", key="bob_encrypt_btn"):
+                    ct_bytes = xor_encrypt(bsess["key"], b_msg_text.encode("utf-8"))
+                    ct_hex = ct_bytes.hex()
+                    st.markdown(f"""
+                    <div style="background:#1e293b; border:1px solid #10b981; border-radius:10px; padding:1.2rem; margin-top:0.8rem;">
+                        <h4 style="color:#34d399; margin-top:0;">🔐 Encryption Summary</h4>
+                        <b>Plaintext Reply:</b> <span style="color:#f8fafc; font-size:1.05rem;">{b_msg_text}</span><br>
+                        <b>Shared Key:</b> <code>{bsess['key'].hex()[:32]}... (SHA-256 derived from s={bsess['s']})</code><br>
+                        <b>Ciphertext on wire:</b><br>
+                        <code style="color:#f87171; font-size:1rem; word-break:break-all;">{ct_hex}</code><br>
+                    </div>
+                    """, unsafe_allow_html=True)
 
     st.markdown("---")
     with st.expander("📡 Wire Protocol Details (Length-Prefixed Framing)", expanded=False):
