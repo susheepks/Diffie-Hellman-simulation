@@ -803,12 +803,37 @@ elif demo_tab == "🦹 Man-in-the-Middle":
 # ──────────────────────────────────────────────────────────────────────────────
 
 elif demo_tab == "🌐 Network Demo":
+    import urllib.request
+    import urllib.error
+
+    def relay_post(relay_url: str, data: dict) -> dict:
+        """POST JSON to relay server."""
+        body = json.dumps(data).encode()
+        req = urllib.request.Request(
+            f"{relay_url.rstrip('/')}/send",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=3) as r:
+            return json.loads(r.read())
+
+    def relay_get(relay_url: str, recipient: str) -> list:
+        """GET pending messages for recipient from relay server."""
+        url = f"{relay_url.rstrip('/')}/messages/{recipient}"
+        with urllib.request.urlopen(url, timeout=3) as r:
+            return json.loads(r.read()).get("messages", [])
+
     st.markdown("## 🌐 Two-Laptop Network Demo (Real TCP Sockets)")
     st.markdown("""
     Demonstrate Diffie-Hellman Key Exchange across **two separate laptops** over a real local network (Wi-Fi or phone hotspot):
     - **Laptop 1 = Alice (TCP Server):** Binds to port `5000` and announces its LAN IP.
     - **Laptop 2 = Bob (TCP Client):** Connects to Alice's LAN IP and verifies public parameters.
     - **Framing:** 4-byte big-endian length header preceding UTF-8 JSON packets.
+
+    > 💡 **For live bidirectional chat**: Start the relay server on Laptop 1 first:
+    > `python network_demo/relay_server.py --port 6000`
+    > Then enter the Relay URL `http://<ALICE_IP>:6000` on **both laptops** below.
     """)
 
     role = st.radio("Select This Laptop's Role:", [
@@ -909,40 +934,66 @@ elif demo_tab == "🌐 Network Demo":
 
             st.markdown("---")
             st.markdown("### 💬 Live Encrypted Messaging (Laptop 1: Alice)")
-            st.markdown("Test encrypting your custom messages using the shared key derived from $s = 2$:")
 
-            tab_a_send, tab_a_recv = st.tabs(["📤 Send Encrypted Message to Bob", "📥 Decrypt Ciphertext from Bob"])
+            relay_url_a = st.text_input(
+                "📡 Relay Server URL (run `python network_demo/relay_server.py` on this laptop first)",
+                value=f"http://{lan_ips[0] if lan_ips else '127.0.0.1'}:6000",
+                key="relay_url_alice",
+            )
 
-            with tab_a_send:
-                a_msg_text = st.text_input("Enter message to send to Bob:", 
-                                           value="Hello Bob! Secure channel established over Diffie-Hellman.", 
-                                           key="alice_msg_input")
-                if st.button("🔐 Encrypt with Shared Key", key="alice_encrypt_btn", type="primary"):
-                    ct_bytes = xor_encrypt(asess["key"], a_msg_text.encode("utf-8"))
-                    ct_hex = ct_bytes.hex()
-                    st.markdown(f"""
-                    <div style="background:#1e293b; border:1px solid #3b82f6; border-radius:10px; padding:1.2rem; margin-top:0.8rem;">
-                        <h4 style="color:#60a5fa; margin-top:0;">🔐 Encryption Summary</h4>
-                        <b>Plaintext Message:</b> <span style="color:#f8fafc; font-size:1.05rem;">{a_msg_text}</span><br>
-                        <b>Shared Key:</b> <code>{asess['key'].hex()[:32]}... (SHA-256 derived from s={asess['s']})</code><br>
-                        <b>Ciphertext sent over the wire (What Eve sees):</b><br>
-                        <code style="color:#f87171; font-size:1rem; word-break:break-all;">{ct_hex}</code><br><br>
-                        <span style="color:#94a3b8; font-size:0.9rem;">
-                            📋 <b>Copy the red ciphertext above</b> and paste it into Bob's "Decrypt Ciphertext" box on Laptop 2!
-                        </span>
-                    </div>
-                    """, unsafe_allow_html=True)
+            col_send_a, col_inbox_a = st.columns([3, 1])
+            with col_send_a:
+                a_msg_text = st.text_input(
+                    "✍️ Message to send to Bob:",
+                    value="Hello Bob! Secure channel established over Diffie-Hellman.",
+                    key="alice_msg_input",
+                )
+            with col_inbox_a:
+                st.markdown("<br>", unsafe_allow_html=True)
+                refresh_a = st.button("🔄 Refresh Inbox", key="alice_refresh_btn")
 
-            with tab_a_recv:
-                st.caption("Paste the hex ciphertext received from Bob on Laptop 2:")
-                b_hex_in = st.text_area("Bob's Ciphertext (Hex):", key="alice_recv_hex", height=70)
-                if st.button("🔓 Decrypt with Alice's Key", key="alice_decrypt_btn"):
-                    if b_hex_in.strip():
-                        try:
-                            pt = xor_decrypt(asess["key"], bytes.fromhex(b_hex_in.strip())).decode("utf-8", errors="replace")
-                            st.success(f"📩 **Decrypted Message from Bob**: {pt}")
-                        except Exception as e:
-                            st.error(f"Decryption error: {e}")
+            if st.button("📤 Encrypt & Send to Bob", key="alice_encrypt_btn", type="primary"):
+                ct_bytes = xor_encrypt(asess["key"], a_msg_text.encode("utf-8"))
+                ct_hex = ct_bytes.hex()
+                try:
+                    relay_post(relay_url_a, {"from": "alice", "ciphertext": ct_hex})
+                    entry = {"role": "sent", "plain": a_msg_text, "ct": ct_hex, "ts": time.strftime("%H:%M:%S")}
+                    st.session_state.setdefault("alice_chat", []).append(entry)
+                    st.success(f"📤 Sent! Ciphertext on wire: `{ct_hex[:48]}...`")
+                except Exception as e:
+                    st.error(f"❌ Relay error: {e}. Is relay_server.py running on port 6000?")
+
+            if refresh_a:
+                try:
+                    msgs = relay_get(relay_url_a, "alice")
+                    for m in msgs:
+                        pt = xor_decrypt(asess["key"], bytes.fromhex(m["ciphertext"])).decode("utf-8", errors="replace")
+                        entry = {"role": "recv", "plain": pt, "ct": m["ciphertext"], "ts": m.get("ts", "")}
+                        st.session_state.setdefault("alice_chat", []).append(entry)
+                    if not msgs:
+                        st.info("📭 No new messages from Bob yet.")
+                except Exception as e:
+                    st.error(f"❌ Cannot reach relay: {e}")
+
+            # Chat history
+            chat_a = st.session_state.get("alice_chat", [])
+            if chat_a:
+                st.markdown("**📜 Chat History:**")
+                for entry in reversed(chat_a[-10:]):
+                    if entry["role"] == "sent":
+                        st.markdown(f"""
+                        <div style="background:#1e3a5f; border-left:4px solid #3b82f6; border-radius:8px; padding:0.7rem 1rem; margin:0.3rem 0;">
+                            <span style="color:#93c5fd; font-size:0.8rem;">[{entry.get('ts','')}] 👩 Alice → Bob (Sent)</span><br>
+                            <b>Plaintext:</b> {entry['plain']}<br>
+                            <span style="color:#94a3b8; font-size:0.85rem;">Wire: <code>{entry['ct'][:48]}...</code></span>
+                        </div>""", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="background:#1a3a2f; border-left:4px solid #10b981; border-radius:8px; padding:0.7rem 1rem; margin:0.3rem 0;">
+                            <span style="color:#6ee7b7; font-size:0.8rem;">[{entry.get('ts','')}] 👨 Bob → Alice (Received)</span><br>
+                            <b>Plaintext:</b> {entry['plain']}<br>
+                            <span style="color:#94a3b8; font-size:0.85rem;">Wire: <code>{entry['ct'][:48]}...</code></span>
+                        </div>""", unsafe_allow_html=True)
 
     else:
         st.markdown("### 👨 Laptop 2: Bob (Client)")
@@ -1036,38 +1087,68 @@ elif demo_tab == "🌐 Network Demo":
 
             st.markdown("---")
             st.markdown("### 💬 Live Encrypted Messaging (Laptop 2: Bob)")
-            st.markdown("Test encrypting and decrypting confidential messages using the shared key derived from $s = 2$:")
 
-            tab_b_recv, tab_b_send = st.tabs(["📥 Decrypt Ciphertext from Alice", "📤 Send Encrypted Reply to Alice"])
+            relay_url_b = st.text_input(
+                "📡 Relay Server URL (Alice's IP, port 6000)",
+                value=f"http://{bsess['target'].split(':')[0]}:6000",
+                key="relay_url_bob",
+            )
 
-            with tab_b_recv:
-                st.caption("Paste the red hex ciphertext generated by Alice on Laptop 1:")
-                a_hex_in = st.text_area("Alice's Ciphertext (Hex):", key="bob_recv_hex", height=70)
-                if st.button("🔓 Decrypt with Bob's Key", key="bob_decrypt_btn", type="primary"):
-                    if a_hex_in.strip():
-                        try:
-                            pt = xor_decrypt(bsess["key"], bytes.fromhex(a_hex_in.strip())).decode("utf-8", errors="replace")
-                            st.success(f"📩 **Decrypted Message from Alice**: {pt}")
-                            st.balloons()
-                        except Exception as e:
-                            st.error(f"Decryption error: {e}")
+            col_send_b, col_inbox_b = st.columns([3, 1])
+            with col_send_b:
+                b_msg_text = st.text_input(
+                    "✍️ Message to send to Alice:",
+                    value="Hi Alice! Received and verified over the secure channel.",
+                    key="bob_msg_input",
+                )
+            with col_inbox_b:
+                st.markdown("<br>", unsafe_allow_html=True)
+                refresh_b = st.button("🔄 Refresh Inbox", key="bob_refresh_btn")
 
-            with tab_b_send:
-                b_msg_text = st.text_input("Enter reply to send to Alice:", 
-                                           value="Hi Alice! Received and verified over the secure channel.", 
-                                           key="bob_msg_input")
-                if st.button("🔐 Encrypt Reply with Shared Key", key="bob_encrypt_btn"):
-                    ct_bytes = xor_encrypt(bsess["key"], b_msg_text.encode("utf-8"))
-                    ct_hex = ct_bytes.hex()
-                    st.markdown(f"""
-                    <div style="background:#1e293b; border:1px solid #10b981; border-radius:10px; padding:1.2rem; margin-top:0.8rem;">
-                        <h4 style="color:#34d399; margin-top:0;">🔐 Encryption Summary</h4>
-                        <b>Plaintext Reply:</b> <span style="color:#f8fafc; font-size:1.05rem;">{b_msg_text}</span><br>
-                        <b>Shared Key:</b> <code>{bsess['key'].hex()[:32]}... (SHA-256 derived from s={bsess['s']})</code><br>
-                        <b>Ciphertext on wire:</b><br>
-                        <code style="color:#f87171; font-size:1rem; word-break:break-all;">{ct_hex}</code><br>
-                    </div>
-                    """, unsafe_allow_html=True)
+            if st.button("📤 Encrypt & Send to Alice", key="bob_encrypt_btn", type="primary"):
+                ct_bytes = xor_encrypt(bsess["key"], b_msg_text.encode("utf-8"))
+                ct_hex = ct_bytes.hex()
+                try:
+                    relay_post(relay_url_b, {"from": "bob", "ciphertext": ct_hex})
+                    entry = {"role": "sent", "plain": b_msg_text, "ct": ct_hex, "ts": time.strftime("%H:%M:%S")}
+                    st.session_state.setdefault("bob_chat", []).append(entry)
+                    st.success(f"📤 Sent! Ciphertext on wire: `{ct_hex[:48]}...`")
+                except Exception as e:
+                    st.error(f"❌ Relay error: {e}. Is relay_server.py running on Laptop 1 port 6000?")
+
+            if refresh_b:
+                try:
+                    msgs = relay_get(relay_url_b, "bob")
+                    for m in msgs:
+                        pt = xor_decrypt(bsess["key"], bytes.fromhex(m["ciphertext"])).decode("utf-8", errors="replace")
+                        entry = {"role": "recv", "plain": pt, "ct": m["ciphertext"], "ts": m.get("ts", "")}
+                        st.session_state.setdefault("bob_chat", []).append(entry)
+                    if not msgs:
+                        st.info("📭 No new messages from Alice yet.")
+                    else:
+                        st.balloons()
+                except Exception as e:
+                    st.error(f"❌ Cannot reach relay: {e}")
+
+            # Chat history
+            chat_b = st.session_state.get("bob_chat", [])
+            if chat_b:
+                st.markdown("**📜 Chat History:**")
+                for entry in reversed(chat_b[-10:]):
+                    if entry["role"] == "sent":
+                        st.markdown(f"""
+                        <div style="background:#1a3a2f; border-left:4px solid #10b981; border-radius:8px; padding:0.7rem 1rem; margin:0.3rem 0;">
+                            <span style="color:#6ee7b7; font-size:0.8rem;">[{entry.get('ts','')}] 👨 Bob → Alice (Sent)</span><br>
+                            <b>Plaintext:</b> {entry['plain']}<br>
+                            <span style="color:#94a3b8; font-size:0.85rem;">Wire: <code>{entry['ct'][:48]}...</code></span>
+                        </div>""", unsafe_allow_html=True)
+                    else:
+                        st.markdown(f"""
+                        <div style="background:#1e3a5f; border-left:4px solid #3b82f6; border-radius:8px; padding:0.7rem 1rem; margin:0.3rem 0;">
+                            <span style="color:#93c5fd; font-size:0.8rem;">[{entry.get('ts','')}] 👩 Alice → Bob (Received)</span><br>
+                            <b>Plaintext:</b> {entry['plain']}<br>
+                            <span style="color:#94a3b8; font-size:0.85rem;">Wire: <code>{entry['ct'][:48]}...</code></span>
+                        </div>""", unsafe_allow_html=True)
 
     st.markdown("---")
     with st.expander("📡 Wire Protocol Details (Length-Prefixed Framing)", expanded=False):
